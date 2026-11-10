@@ -466,11 +466,72 @@ async def build_language_video(
 # =====================================================================
 # 8. MAIN ORCHESTRATOR
 # =====================================================================
+def get_mock_episode_data(story: dict, ep_num: int) -> MultiLangEpisode:
+    """Generate mock episode data for offline or testing runs without calling Gemini."""
+    anchor = story["character_visual_anchor"]
+    beat = story["episode_beats"][ep_num - 1] if ep_num <= len(story["episode_beats"]) else ""
+    return MultiLangEpisode(
+        episode_summary_for_next_part=f"Summary of {story['series_title']} Part {ep_num}: {beat}",
+        visual_prompts_english=[
+            f"{anchor}, scene {i+1}, standing near the historic ruins, 9:16 vertical portrait layout, cinematic lighting"
+            for i in range(5)
+        ],
+        kannada=LocalizedMetadata(
+            title=f"{story['series_title']} - Part {ep_num} | ಕನ್ನಡ ಕಥೆಗಳು #Shorts",
+            description=f"ಕನ್ನಡದಲ್ಲಿ ಸುಂದರ ಕಥೆ - {story['series_title']} ಭಾಗ {ep_num}. #Shorts #KannadaStories #Folklore",
+            tags=["ಕನ್ನಡ ಕಥೆಗಳು", "Kannada Stories", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Hampi", "Karnataka"],
+            narration_scenes=[
+                "ಒಂದು ಕಾಲದಲ್ಲಿ ಹಂಪಿಯ ಪವಿತ್ರ ನೆಲದಲ್ಲಿ ಒಂದು ಅದ್ಭುತ ರಹಸ್ಯ ಅಡಗಿತ್ತು.",
+                "ಬುದ್ಧಿವಂತ ಪುಟ್ಟ ತನ್ನ ಪುಟ್ಟ ಗಿಳಿಯೊಂದಿಗೆ ಹಳೆಯ ಬಾವಿಯ ಬಳಿ ನಿಂತಿದ್ದನು.",
+                "ನೀರಿನ ಒಳಗಿನಿಂದ ನಿಗೂಢ ಧ್ವನಿಯೊಂದು ಅವನ ಹೆಸರನ್ನು ಕರೆಯುತ್ತಿತ್ತು.",
+                "ಬಾವಿಯ ಮೆಟ್ಟಿಲುಗಳ ಮೇಲೆ ಚಿನ್ನದ ಕೀಲಿಯೊಂದು ಪ್ರಕಾಶಮಾನವಾಗಿ ಹೊಳೆಯುತ್ತಿತ್ತು.",
+                "ಆದರೆ ಆ ಕೀಲಿಯನ್ನು ಮುಟ್ಟಿದರೆ ಏನಾಗುತ್ತದೆ? ಮುಂದಿನ ಭಾಗವನ್ನು ನೋಡಲು ಈಗಲೇ ಸಬ್ಸ್ಕ್ರೈಬ್ ಮಾಡಿ!"
+            ]
+        ),
+        telugu=LocalizedMetadata(
+            title=f"{story['series_title']} - Part {ep_num} | తెలుగు కథలు #Shorts",
+            description=f"తెలుగులో అద్భుతమైన కథ - {story['series_title']} భాగం {ep_num}. #Shorts #TeluguStories #Folklore",
+            tags=["తెలుగు కథలు", "Telugu Stories", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Tenali Rama", "Andhra"],
+            narration_scenes=[
+                "ఒకప్పుడు హంపీ పవిత్ర భూమిలో ఒక అద్భుతమైన రహస్యం దాగి ఉంది.",
+                "తెలివైన పుట్టా తన చిన్న చిలుకతో కలిసి పాత బావి వద్ద నిలబడ్డాడు.",
+                "నీటి లోపలి నుండి ఒక వింత శబ్దం అతని పేరును పిలుస్తోంది.",
+                "బావి మెట్లపై బంగారు తాళంచెవి కాంతివంతంగా మెరుస్తోంది.",
+                "కానీ ఆ తాళంచెవిని ముట్టుకుంటే ఏమవుతుంది? తరువాతి భాగం కోసం ఇప్పుడే సబ్‌స్క్రైబ్ చేయండి!"
+            ]
+        ),
+        hindi=LocalizedMetadata(
+            title=f"{story['series_title']} - Part {ep_num} | हिंदी कहानियाँ #Shorts",
+            description=f"हम्पी की जादुई लोककथा - {story['series_title']} भाग {ep_num}. #Shorts #HindiKahaniya #Folklore",
+            tags=["हिंदी कहानियां", "Hindi Kahaniya", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Tenali Raman", "Indian Myths"],
+            narration_scenes=[
+                "एक समय की बात है, हम्पी की पवित्र भूमि में एक अनोखा रहस्य छिपा हुआ था।",
+                "चतुर पुट्टा अपने छोटे तोते के साथ पुराने कुएं के पास खड़ा था।",
+                "कुएं के गहरे पानी से एक रहस्यमयी आवाज उसका नाम पुकार रही थी।",
+                "सीढ़ियों पर एक जादुई सुनहरी चाबी दिव्य प्रकाश से चमक रही थी।",
+                "लेकिन उस चाबी को छूते ही क्या होगा? अगला भाग देखने के लिए अभी सब्सक्राइब करें!"
+            ]
+        )
+    )
+
+
 async def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Multi-Language YouTube Shorts Pipeline")
+    parser.add_argument("--skip-upload", action="store_true", help="Render videos only; do not upload to YouTube")
+    parser.add_argument("--dry-run", action="store_true", help="Run without persisting updated story state or vault")
+    parser.add_argument("--mock", action="store_true", help="Use built-in mock script (no Gemini API calls)")
+    parser.add_argument("--episode", type=int, default=None, help="Force a specific episode number")
+    args = parser.parse_args()
+
     # Load state and vault
     state = load_story_state()
     bank = load_story_bank()
     story = get_current_story(state, bank)
+
+    if args.episode is not None:
+        state["current_episode"] = args.episode
 
     ep_num = state["current_episode"]
     max_ep = state["max_episodes_in_arc"]
@@ -479,10 +540,19 @@ async def main() -> None:
     print(f"🎬 [{story['category']}] {story['series_title']}")
     print(f"   Episode {ep_num} of {max_ep}")
     print(f"   Character: {story['character_visual_anchor'][:80]}...")
+    if args.mock:
+        print("   Mode: MOCK DATA (No Gemini API call)")
+    if args.skip_upload:
+        print("   Upload: SKIPPED (--skip-upload)")
+    if args.dry_run:
+        print("   State Persistence: DISABLED (--dry-run)")
     print("=" * 60)
 
-    # Step 1: Generate all content with Gemini (story-vault-aware)
-    episode_data = generate_episode_data(state, story)
+    # Step 1: Generate all content with Gemini (or mock)
+    if args.mock:
+        episode_data = get_mock_episode_data(story, ep_num)
+    else:
+        episode_data = generate_episode_data(state, story)
 
     # Step 2: Download shared images ONCE (with character visual anchoring)
     work_dir = "output_build"
@@ -511,51 +581,56 @@ async def main() -> None:
             mf.write(meta.model_dump_json(indent=2))
 
     # Step 4: Upload to YouTube (each language to its own channel)
-    try:
-        from upload_to_youtube import upload_short
+    if not args.skip_upload:
+        try:
+            from upload_to_youtube import upload_short
 
-        for lang_key, vpath in video_paths.items():
-            lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
-            meta = lang_map[lang_key]
-            print(f"\n[Upload] Uploading {lang_key.upper()} Short to YouTube...")
-            upload_short(
-                video_file=vpath,
-                title=meta.title,
-                description=meta.description,
-                tags=meta.tags,
-                lang_code=lang_code,
-                category_id="24",  # Entertainment
-            )
-    except ImportError:
-        print("[Upload] ⚠️  upload_to_youtube.py not found — skipping upload.")
-    except Exception as e:
-        print(f"[Upload] ⚠️  Upload failed: {e}")
+            for lang_key, vpath in video_paths.items():
+                lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
+                meta = lang_map[lang_key]
+                print(f"\n[Upload] Uploading {lang_key.upper()} Short to YouTube...")
+                upload_short(
+                    video_file=vpath,
+                    title=meta.title,
+                    description=meta.description,
+                    tags=meta.tags,
+                    lang_code=lang_code,
+                    category_id="24",  # Entertainment
+                )
+        except ImportError:
+            print("[Upload] ⚠️  upload_to_youtube.py not found — skipping upload.")
+        except Exception as e:
+            print(f"[Upload] ⚠️  Upload failed: {e}")
+    else:
+        print("\n[Upload] ⏭️  Skipped upload as requested (--skip-upload).")
 
     # Step 5: Advance Story State
-    if ep_num >= max_ep:
-        # Arc complete — move to next story in vault
-        print(f"\n🏁 Arc complete: '{story['series_title']}'")
-        advance_to_next_story(state, bank)
+    if not args.dry_run:
+        if ep_num >= max_ep:
+            print(f"\n🏁 Arc complete: '{story['series_title']}'")
+            advance_to_next_story(state, bank)
+        else:
+            state["current_episode"] = ep_num + 1
+            state["previous_summary"] = episode_data.episode_summary_for_next_part
+            print(
+                f"\n➡️  Advanced to Episode {state['current_episode']} of "
+                f"'{story['series_title']}'"
+            )
+
+        save_story_state(state)
+
+        # Step 6: Pre-emptive vault refill check
+        completed = set(state.get("completed_story_ids", []))
+        remaining = sum(1 for s in bank if s["id"] not in completed)
+        if remaining < 2:
+            print(f"\n[Vault] Only {remaining} stories remaining. Pre-emptive refill...")
+            refill_story_vault(load_story_bank(), count=4)
     else:
-        # Next episode in current arc
-        state["current_episode"] = ep_num + 1
-        state["previous_summary"] = episode_data.episode_summary_for_next_part
-        print(
-            f"\n➡️  Advanced to Episode {state['current_episode']} of "
-            f"'{story['series_title']}'"
-        )
-
-    save_story_state(state)
-
-    # Step 6: Pre-emptive vault refill check
-    completed = set(state.get("completed_story_ids", []))
-    remaining = sum(1 for s in bank if s["id"] not in completed)
-    if remaining < 2:
-        print(f"\n[Vault] Only {remaining} stories remaining. Pre-emptive refill...")
-        refill_story_vault(load_story_bank(), count=4)
+        print("\n[State] ⏭️  Skipped state advancement (--dry-run).")
 
     print("\n" + "=" * 60)
     print("✅ Pipeline complete!")
+    print(f"📁 Output files in: {os.path.abspath(work_dir)}")
     print("=" * 60)
 
 
