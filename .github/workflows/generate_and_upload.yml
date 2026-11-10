@@ -12,7 +12,7 @@ permissions:
 jobs:
   generate-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       - name: 📥 Checkout repository
@@ -24,9 +24,9 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install dependencies & Indic fonts
         run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
+          sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-core fonts-noto-ui-core fonts-noto-extra
           pip install -r requirements.txt
 
       - name: 🔑 Decode YouTube OAuth tokens

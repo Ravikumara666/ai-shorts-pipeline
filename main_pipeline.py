@@ -61,21 +61,65 @@ class MultiLangEpisode(BaseModel):
     hindi: LocalizedMetadata
 
 
-# Voice Mapping for Microsoft Edge-TTS (100% Free Neural Voices)
+# Voice & Subtitle Font Mapping for Microsoft Edge-TTS
 LANGUAGE_CONFIG: dict[str, dict[str, str]] = {
     "kannada": {
         "voice": os.getenv("KN_VOICE", "kn-IN-GaganNeural"),
         "lang_code": "kn",
+        "font_name": "Noto Sans Kannada",
     },
     "telugu": {
         "voice": os.getenv("TE_VOICE", "te-IN-MohanNeural"),
         "lang_code": "te",
+        "font_name": "Noto Sans Telugu",
     },
     "hindi": {
         "voice": os.getenv("HI_VOICE", "hi-IN-MadhurNeural"),
         "lang_code": "hi",
+        "font_name": "Noto Sans Devanagari",
     },
 }
+
+
+def check_subtitles_filter_support() -> bool:
+    """Check if the current ffmpeg binary has the subtitles/libass filter enabled."""
+    try:
+        out = subprocess.check_output(
+            [FFMPEG, "-filters"], stderr=subprocess.STDOUT
+        ).decode(errors="ignore")
+        return "subtitles" in out
+    except Exception:
+        return False
+
+
+HAS_SUBTITLES_FILTER = check_subtitles_filter_support()
+
+
+def ensure_bgm_track() -> str:
+    """Ensure assets/bgm.mp3 exists; if missing, generate a gentle ambient drone loop via FFmpeg."""
+    bgm_dir = Path("assets")
+    bgm_dir.mkdir(parents=True, exist_ok=True)
+    bgm_file = bgm_dir / "bgm.mp3"
+
+    if bgm_file.exists() and bgm_file.stat().st_size > 10_000:
+        return str(bgm_file.resolve())
+
+    print("[BGM] Generating default ambient mystery loop via FFmpeg...")
+    cmd = [
+        FFMPEG, "-y",
+        "-f", "lavfi",
+        "-i", (
+            "aevalsrc=sin(2*PI*146.83*t)*0.04*sin(2*PI*0.1*t)"
+            "+sin(2*PI*220*t)*0.03*cos(2*PI*0.15*t)"
+            "+sin(2*PI*293.66*t)*0.025*sin(2*PI*0.2*t)"
+            "+sin(2*PI*440*t)*0.015*cos(2*PI*0.08*t):d=60:s=44100"
+        ),
+        "-c:a", "libmp3lame", "-b:a", "128k",
+        str(bgm_file),
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    print(f"[BGM] ✅ Default BGM track ready: {bgm_file}")
+    return str(bgm_file.resolve())
 
 
 # =====================================================================
@@ -369,14 +413,50 @@ def generate_shared_images(
 
 
 # =====================================================================
-# 6. GENERATE REGIONAL VOICEOVER & EXACT DURATION
+# 6. GENERATE REGIONAL VOICEOVER & SUBTITLES
 # =====================================================================
+def _ticks_to_srt_time(ticks: int) -> str:
+    """Convert 100-nanosecond ticks to standard SRT HH:MM:SS,mmm timestamp."""
+    total_seconds = max(0.0, ticks / 10_000_000)
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    secs = int(total_seconds % 60)
+    millis = int((total_seconds - int(total_seconds)) * 1000)
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+
+
+def _build_srt_content(boundaries: list[dict], fallback_text: str, duration: float) -> str:
+    """Build SRT formatted subtitles from edge-tts boundary events."""
+    if boundaries:
+        entries = []
+        for idx, b in enumerate(boundaries, start=1):
+            start = _ticks_to_srt_time(b["offset"])
+            end = _ticks_to_srt_time(b["offset"] + b["duration"])
+            t = b.get("text", "").strip()
+            if t:
+                entries.append(f"{idx}\n{start} --> {end}\n{t}\n")
+        if entries:
+            return "\n".join(entries)
+
+    # Fallback to single subtitle spanning the scene
+    start_str = "00:00:00,000"
+    end_str = _ticks_to_srt_time(int(duration * 10_000_000))
+    return f"1\n{start_str} --> {end_str}\n{fallback_text.strip()}\n"
+
+
 async def synthesize_scene_audio(
-    text: str, voice: str, out_mp3: str
+    text: str, voice: str, out_mp3: str, out_srt: str
 ) -> float:
-    """Synthesize TTS audio and return exact duration in seconds."""
+    """Synthesize TTS audio, capture boundary timestamps for .srt, return speech duration."""
     communicate = edge_tts.Communicate(text, voice, rate="+5%")
-    await communicate.save(out_mp3)
+    boundaries: list[dict] = []
+
+    with open(out_mp3, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+            elif chunk["type"] in ("SentenceBoundary", "WordBoundary"):
+                boundaries.append(chunk)
 
     cmd = [
         FFPROBE,
@@ -386,78 +466,135 @@ async def synthesize_scene_audio(
         out_mp3,
     ]
     duration = float(subprocess.check_output(cmd).decode().strip())
-    print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s")
+
+    # Save SRT file
+    srt_content = _build_srt_content(boundaries, text, duration)
+    with open(out_srt, "w", encoding="utf-8") as sf:
+        sf.write(srt_content)
+
+    print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s (+SRT captions)")
     return duration
 
 
 # =====================================================================
-# 7. RENDER LANGUAGE-SPECIFIC SHORT (KEN BURNS + CONCATENATE)
+# 7. RENDER LANGUAGE-SPECIFIC SHORT (KEN BURNS + CAPTIONS + BGM MIX)
 # =====================================================================
 async def build_language_video(
     lang_key: str,
     meta: LocalizedMetadata,
     image_paths: list[str],
     work_dir: str,
+    bgm_path: Optional[str] = None,
 ) -> str:
-    """Build a single language Short from shared images + TTS narration."""
+    """Build a single language Short from shared images, subtitles, BGM, and TTS narration."""
     voice = LANGUAGE_CONFIG[lang_key]["voice"]
+    font_name = LANGUAGE_CONFIG[lang_key].get("font_name", "Noto Sans")
     lang_dir = os.path.join(work_dir, lang_key)
     os.makedirs(lang_dir, exist_ok=True)
 
-    print(f"\n[{lang_key.upper()}] Building Short with voice {voice}...")
+    print(f"\n[{lang_key.upper()}] Building Short with voice {voice} (Font: {font_name})...")
 
     segment_files: list[str] = []
     for i, (scene_text, img_path) in enumerate(
         zip(meta.narration_scenes, image_paths)
     ):
         audio_path = os.path.join(lang_dir, f"audio_{i}.mp3")
+        srt_path = os.path.join(lang_dir, f"audio_{i}.srt")
         seg_path = os.path.join(lang_dir, f"seg_{i}.mp4")
 
-        duration = await synthesize_scene_audio(scene_text, voice, audio_path)
-        frames = int(duration * 30) + 15  # 30 fps + slight buffer
+        # 1. Synthesize audio + generate SRT captions
+        duration = await synthesize_scene_audio(scene_text, voice, audio_path, srt_path)
 
+        # 2. Add 0.35s natural breath pause to segment duration
+        total_seg_duration = duration + 0.35
+        frames = int(total_seg_duration * 30) + 5
+
+        # 3. Base Ken Burns zoompan filter
+        vf_filters = [
+            "scale=1080:1920",
+            f"zoompan=z='min(zoom+0.0012,1.3)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30",
+        ]
+
+        # 4. Burn-in subtitles if filter is supported (MarginV=280 safe zone, yellow font with black outline)
+        if HAS_SUBTITLES_FILTER:
+            srt_filename = f"audio_{i}.srt"
+            sub_style = (
+                f"Fontname={font_name},FontSize=20,Bold=1,PrimaryColour=&H0000FFFF,"
+                "OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,"
+                "Alignment=2,MarginV=280"
+            )
+            vf_filters.append(f"subtitles={srt_filename}:force_style='{sub_style}'")
+
+        vf_filters.append("format=yuv420p")
+        vf_chain = ",".join(vf_filters)
+
+        # 5. Render segment with audio padding (-af apad=pad_dur=0.35) and standardized audio (-ar 44100 -ac 2)
         ffmpeg_cmd = [
             FFMPEG, "-y",
-            "-loop", "1", "-i", img_path,
-            "-i", audio_path,
-            "-vf", (
-                f"scale=1080:1920,"
-                f"zoompan=z='min(zoom+0.0012,1.3)'"
-                f":d={frames}"
-                f":x='iw/2-(iw/zoom/2)'"
-                f":y='ih/2-(ih/zoom/2)'"
-                f":s=1080x1920:fps=30,"
-                f"format=yuv420p"
-            ),
+            "-loop", "1", "-i", os.path.abspath(img_path),
+            "-i", os.path.abspath(audio_path),
+            "-t", f"{total_seg_duration:.3f}",
+            "-vf", vf_chain,
             "-c:v", "libx264", "-preset", "veryfast",
+            "-af", "apad=pad_dur=0.35",
             "-c:a", "aac", "-b:a", "128k",
-            "-shortest", seg_path,
+            "-ar", "44100", "-ac", "2",
+            os.path.abspath(seg_path),
         ]
         subprocess.run(
             ffmpeg_cmd,
+            cwd=lang_dir,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
         )
         segment_files.append(seg_path)
-        print(f"    ✅ Segment {i + 1}/5 rendered")
+        print(f"    ✅ Segment {i + 1}/5 rendered ({total_seg_duration:.2f}s with +0.35s breath pause)")
 
-    # Concatenate all segments into final Short
+    # 6. Concatenate all 5 segments into raw stitched video
     concat_list = os.path.join(lang_dir, "concat.txt")
     with open(concat_list, "w") as f:
         for seg in segment_files:
             f.write(f"file '{os.path.abspath(seg)}'\n")
 
-    final_mp4 = os.path.join(work_dir, f"final_{lang_key}.mp4")
+    concat_mp4 = os.path.join(lang_dir, "concat_raw.mp4")
     subprocess.run(
         [
             FFMPEG, "-y", "-f", "concat", "-safe", "0",
-            "-i", concat_list, "-c", "copy", final_mp4,
+            "-i", concat_list, "-c", "copy", concat_mp4,
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=True,
     )
+
+    # 7. Mix BGM at 10% volume into final video
+    final_mp4 = os.path.join(work_dir, f"final_{lang_key}.mp4")
+    if bgm_path and os.path.isfile(bgm_path):
+        subprocess.run(
+            [
+                FFMPEG, "-y",
+                "-i", concat_mp4,
+                "-stream_loop", "-1",
+                "-i", bgm_path,
+                "-filter_complex", (
+                    "[1:a]volume=0.10[bgm];"
+                    "[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                ),
+                "-map", "0:v",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-ar", "44100", "-ac", "2",
+                "-shortest", final_mp4,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        print(f"[{lang_key.upper()}] 🎵 Mixed BGM at 10% volume into Short.")
+    else:
+        shutil.copyfile(concat_mp4, final_mp4)
 
     print(f"[{lang_key.upper()}] ✅ Final Short -> {final_mp4}")
     return final_mp4
@@ -561,7 +698,10 @@ async def main() -> None:
         os.path.join(work_dir, "shared_images"),
     )
 
-    # Step 3: Build Shorts for each language
+    # Step 3: Ensure background music track exists
+    bgm_path = ensure_bgm_track()
+
+    # Step 4: Build Shorts for each language (with Ken Burns, Captions, and BGM)
     lang_map: dict[str, LocalizedMetadata] = {
         "kannada": episode_data.kannada,
         "telugu":  episode_data.telugu,
@@ -571,7 +711,7 @@ async def main() -> None:
     video_paths: dict[str, str] = {}
     for lang_key, meta in lang_map.items():
         video_path = await build_language_video(
-            lang_key, meta, images, work_dir
+            lang_key, meta, images, work_dir, bgm_path=bgm_path
         )
         video_paths[lang_key] = video_path
 
@@ -580,7 +720,7 @@ async def main() -> None:
         with open(meta_path, "w", encoding="utf-8") as mf:
             mf.write(meta.model_dump_json(indent=2))
 
-    # Step 4: Upload to YouTube (each language to its own channel)
+    # Step 5: Upload to YouTube (each language to its own channel)
     if not args.skip_upload:
         try:
             from upload_to_youtube import upload_short
