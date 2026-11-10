@@ -1,0 +1,86 @@
+[
+    {
+        "id": "story_001",
+        "category": "Vijayanagara Mystery",
+        "series_title": "The Whispering Well of Hampi",
+        "character_visual_anchor": "A clever 12-year-old South Indian village boy named Putta with warm brown skin, bright curious eyes, wearing a bright saffron dhoti with golden border and a small blue turban with a red feather, accompanied by a tiny emerald-green parrot with a golden beak perched on his shoulder, 3D Pixar Disney animation style, vibrant warm lighting, detailed Indian village backdrop",
+        "core_plot": "An ancient stepwell in Hampi whispers where royal Vijayanagara treasure is hidden, but turns anyone greedy into stone. Only a pure-hearted child can break the curse.",
+        "episode_beats": [
+            "Part 1 (The Hook): Putta hears the ancient stepwell whispering his name at midnight. He sneaks out and sees a glowing golden key at the bottom of the moonlit water. His parrot Meena warns him of danger.",
+            "Part 2 (The Trap): Putta climbs down the mossy steps. The water transforms into a shimmering mirror showing a terrifying stone Yaksha guardian who demands he solve three impossible riddles or be turned to stone forever.",
+            "Part 3 (The Twist): The greedy village landlord Shankar follows Putta, pushes him aside, steals the golden key, and is immediately turned into a stone frog! Putta must now solve the riddles to save even his enemy.",
+            "Part 4 (The Clever Plan): Putta uses his parrot Meena's mimicry and a clever echo trick inside the well chamber to outsmart the Yaksha's riddles. The Yaksha is impressed by his wit AND his compassion for the landlord.",
+            "Part 5 (The Climax & Moral): The curse breaks. The landlord returns to human form, tearfully apologizes. The real treasure was not gold — it was a hidden underground spring. Life-saving water flows for the drought-struck village. Moral: True wealth is generosity, not greed."
+        ]
+    },
+    {
+        "id": "story_002",
+        "category": "Tenali Rama Wit",
+        "series_title": "Tenali Rama and the Golden Mango Tree",
+        "character_visual_anchor": "Tenali Rama as a clever witty 30-year-old South Indian courtier with a sharp angular face, mischievous twinkling eyes, wearing ornate Vijayanagara royal cream and gold silk robes with a tall elegant red and gold turban, holding a wooden walking staff, 3D Pixar Disney animation style, grand Vijayanagara palace interior with carved pillars",
+        "core_plot": "Emperor Krishnadevaraya challenges his ministers to grow a tree bearing pure gold mangoes overnight. Every minister tries to cheat. Only Tenali Rama's brilliant trick reveals the true meaning of gold.",
+        "episode_beats": [
+            "Part 1: Emperor Krishnadevaraya, frustrated by his ministers' flattery, announces a grand challenge: grow a tree that bears pure gold mangoes by sunrise. The prize? A chest of diamonds. The penalty for cheating? Banishment!",
+            "Part 2: Greedy minister Appaji secretly coats real mangoes in gold paint at night. Another minister Timmarasu hires a goldsmith to make fake gold fruit. The royal gardener catches them both and they are humiliated in open court.",
+            "Part 3: Tenali Rama calmly plants a mysterious clay pot in the courtyard and whispers a secret mantra over it. He tells the Emperor: 'Your Majesty, only the water of pure honesty can make it grow. You must water it yourself.'",
+            "Part 4: The Emperor picks up the golden jug to water it but hesitates — he realizes he has been dishonest too (he secretly had the tax collectors steal from the poor). He cannot water it! The entire court watches in shock.",
+            "Part 5: Tenali Rama reveals the pot was empty — there was never a seed. The real golden mango was the Emperor's moment of self-reflection. The Emperor, moved to tears, reforms the tax system and rewards Tenali Rama. Moral: Honesty is the truest gold."
+        ]
+    },
+    {
+        "id": "story_003",
+        "category": "Panchatantra Fable",
+        "series_title": "The Monkey King and the Crocodile's Heart",
+        "character_visual_anchor": "A playful wise young monkey king with golden-brown fur, a tiny jeweled crown, and a red silk scarf around his neck, sitting in a massive banyan tree overhanging a sparkling blue river, 3D Pixar Disney animation style, lush tropical Indian forest, dappled sunlight, vibrant greens and blues",
+        "core_plot": "A monkey king befriends a crocodile, but the crocodile's jealous wife demands the monkey's heart for dinner. The monkey must use his wit to survive betrayal by his closest friend.",
+        "episode_beats": [
+            "Part 1: Vanara the monkey king lives alone in a great banyan tree by the river. He befriends Makara the crocodile by sharing sweet rose-apples. They become best friends, talking for hours every evening.",
+            "Part 2: Makara's wife becomes jealous and furious. She fakes illness and tells Makara: 'The doctor says only a monkey's heart can cure me. Bring me your friend's heart or I will die!' Makara is torn between love and friendship.",
+            "Part 3: Makara invites Vanara for dinner at his underwater home. Halfway across the river on Makara's back, Makara confesses the terrible truth. Vanara's heart sinks — he is trapped in the middle of a deep river!",
+            "Part 4: Vanara thinks fast. He laughs and says: 'Oh friend, why didn't you say so earlier? I left my heart hanging safely in the banyan tree! Take me back and I'll get it for you!' The gullible Makara turns around.",
+            "Part 5: Vanara leaps to safety on his tree and tells Makara: 'A true friend would never betray trust. Go tell your wife that hearts are not kept in trees — but broken trust can never be repaired.' Makara weeps with shame. Moral: Quick wit saves lives, but betrayal destroys friendships forever."
+        ]
+    },
+    {
+        "id": "story_004",
+        "category": "South Indian Folklore",
+        "series_title": "The Dancing Peacock of Mysore Palace",
+        "character_visual_anchor": "A magnificent magical peacock with iridescent sapphire-blue and emerald-green feathers that glow with inner light, a golden crown on its head, dancing in front of Mysore Palace at sunset, and a young 10-year-old Kannada girl named Kaveri with long braided hair and jasmine flowers wearing a bright green silk pavadai, 3D Pixar Disney animation style, golden sunset lighting, ornate palace architecture",
+        "core_plot": "A magical peacock that guards Mysore Palace can only be seen by pure-hearted children. When the palace is threatened by a shadow curse, only little Kaveri and the peacock can save it.",
+        "episode_beats": [
+            "Part 1: During Dasara festival, young Kaveri sees a shimmering peacock on the palace dome that no adult can see. When she tells her grandmother, granny whispers: 'That is Mayura, the guardian spirit. If you can see him, the palace needs you.'",
+            "Part 2: Strange dark shadows begin creeping through the palace halls at night, turning the famous Dasara lights dim. The King's advisors are baffled. Only Kaveri notices the shadows are being cast by an ancient cursed mirror in the basement.",
+            "Part 3: Kaveri follows Mayura the peacock into the forbidden basement corridor. She finds the cursed mirror — it shows anyone who looks into it their worst fears, paralyzing them. The shadow demon inside tries to trap Kaveri!",
+            "Part 4: Mayura fans his magical tail feathers, creating a shield of rainbow light. Kaveri remembers her grandmother's lullaby about courage and sings it. The song weakens the shadow demon. Together they crack the mirror with a peacock feather dipped in sacred turmeric water.",
+            "Part 5: The mirror shatters, the shadows vanish, and the Dasara lights blaze brighter than ever. The King honors Kaveri as the 'Guardian of Mysore.' Mayura winks at her and dissolves into the palace walls — always watching, always protecting. Moral: Courage is seeing the truth when everyone else looks away."
+        ]
+    },
+    {
+        "id": "story_005",
+        "category": "Mythological Adventure",
+        "series_title": "Hanuman's Secret Mountain Quest",
+        "character_visual_anchor": "Young Hanuman as a powerful but humble monkey warrior with bright golden fur, wearing a red silk dhoti and a golden chest armor plate, carrying a tiny glowing mace, with Himalayan snow peaks behind him, 3D Pixar Disney animation style, epic dramatic lighting, snow and clouds swirling",
+        "core_plot": "Young Hanuman must find the legendary Sanjeevani herb on a magical mountain to save his injured guru, but the mountain itself is alive and tests him with illusions.",
+        "episode_beats": [
+            "Part 1: Young Hanuman's beloved guru Surya (the Sun God) falls gravely ill after a cosmic battle. The Vaidya (healer) says only the Sanjeevani herb from Dronagiri mountain can save him — but the mountain moves every night!",
+            "Part 2: Hanuman flies across oceans and forests. He reaches the Himalayas but Dronagiri mountain is invisible! An old sage gives him a clue: 'The mountain reveals itself only to those who carry no pride.' Hanuman must shed his ego.",
+            "Part 3: Hanuman humbly bows and the mountain appears — but it's ALIVE! The mountain spirit Dronagiri tests him with three illusions: a river of gold, a throne of power, and a mirror showing him as king of all monkeys. Hanuman refuses all three.",
+            "Part 4: The final test: the mountain shows an illusion of his guru already healed, saying 'Go home, Hanuman, I'm fine.' Hanuman almost falls for it but notices the illusion casts no shadow. He sees through the trick!",
+            "Part 5: The mountain spirit, impressed by Hanuman's devotion and wisdom, offers him a single glowing herb. But Hanuman cannot identify which herb is Sanjeevani — so he lifts the ENTIRE mountain peak! He flies it back and saves his guru. Moral: Humility and devotion can move mountains — literally."
+        ]
+    },
+    {
+        "id": "story_006",
+        "category": "Village Wisdom",
+        "series_title": "The Clever Weaver's Flying Cloth",
+        "character_visual_anchor": "A thin, kind-faced elderly Indian village weaver named Devaiah with silver hair, round spectacles, wearing a simple white cotton dhoti and a faded blue shawl, sitting at a large wooden handloom weaving colorful silk fabric that magically glows, in a small South Indian village house, 3D Pixar Disney animation style, warm cozy indoor lighting with golden thread particles floating in air",
+        "core_plot": "An old weaver accidentally weaves a cloth that can fly. The greedy king wants it for war, but the weaver must protect his magical creation for the good of the village.",
+        "episode_beats": [
+            "Part 1: Old weaver Devaiah is so absorbed in weaving during a thunderstorm that lightning strikes his loom. The silk he was weaving starts to glow and float! He has accidentally created a flying cloth.",
+            "Part 2: Devaiah uses the flying cloth to deliver medicines to a sick child in a distant hilltop village during floods. Word spreads. The greedy neighboring king Bhujanga sends soldiers to seize the magical cloth for his army.",
+            "Part 3: Devaiah hides the cloth inside a waterfall cave. The king's soldiers tear apart his house and break his loom. The villagers are terrified. Devaiah's granddaughter Lakshmi has a clever idea.",
+            "Part 4: Lakshmi and Devaiah set a trap. They weave a FAKE glowing cloth (using firefly paste) and let the king's spies 'discover' it. King Bhujanga triumphantly rides the fake cloth off a cliff — it doesn't fly! He lands safely in a mud pit, humiliated before his entire army.",
+            "Part 5: The embarrassed king returns the broken loom and apologizes. Devaiah repairs his loom and weaves flying cloths for the village — used only for rescue, medicine delivery, and festival celebrations. Moral: True magic is using your gifts to serve others, not to conquer them."
+        ]
+    }
+]

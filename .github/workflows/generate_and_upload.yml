@@ -1,0 +1,53 @@
+name: 🎬 Generate & Upload Multi-Language Shorts
+
+on:
+  schedule:
+    # 03:30 UTC = 09:00 IST, 12:30 UTC = 18:00 IST
+    - cron: '30 3,12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt
+
+      - name: 🔑 Decode YouTube OAuth tokens
+        env:
+          YT_TOKEN_KN: ${{ secrets.YT_TOKEN_KN }}
+          YT_TOKEN_TE: ${{ secrets.YT_TOKEN_TE }}
+          YT_TOKEN_HI: ${{ secrets.YT_TOKEN_HI }}
+        run: |
+          echo "$YT_TOKEN_KN" | base64 -d > token_kn.json
+          echo "$YT_TOKEN_TE" | base64 -d > token_te.json
+          echo "$YT_TOKEN_HI" | base64 -d > token_hi.json
+
+      - name: 🎬 Generate & Upload Shorts
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -m main_pipeline
+
+      - name: 📝 Commit updated state & vault
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add story_state.json story_bank.json
+          git diff --cached --quiet || git commit -m "🔄 Auto-update story state & vault [skip ci]"
+          git push
