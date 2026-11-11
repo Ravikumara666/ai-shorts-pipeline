@@ -5,6 +5,20 @@ on:
     # 03:30 UTC = 09:00 IST, 12:30 UTC = 18:00 IST
     - cron: '30 3,12 * * *'
   workflow_dispatch:
+    inputs:
+      num_scenes:
+        description: 'Scenes per episode (lower = cheaper, e.g. 2 for a smoke test)'
+        required: false
+        default: '8'
+      image_provider:
+        description: 'Image backend: auto | gemini | pollinations | hf (hf = free)'
+        required: false
+        default: 'auto'
+      skip_upload:
+        description: 'Render only — do not upload to YouTube or persist state'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -66,7 +80,16 @@ jobs:
           # Optional image fallbacks — pipeline runs without them (Gemini is primary).
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-        run: python -m main_pipeline
+          # Manual-run overrides; scheduled runs fall back to the defaults.
+          NUM_SCENES: ${{ github.event.inputs.num_scenes || '8' }}
+          IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || 'auto' }}
+        run: |
+          if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
+            echo "🧪 Test mode: rendering only (no upload, no state changes)."
+            python -m main_pipeline --skip-upload --dry-run
+          else
+            python -m main_pipeline
+          fi
 
       - name: 📝 Commit updated state & vault
         run: |
