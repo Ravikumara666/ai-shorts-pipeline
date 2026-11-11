@@ -63,6 +63,9 @@ jobs:
       - name: 🎬 Generate & Upload Shorts
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Optional image fallbacks — pipeline runs without them (Gemini is primary).
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
         run: python -m main_pipeline
 
       - name: 📝 Commit updated state & vault
