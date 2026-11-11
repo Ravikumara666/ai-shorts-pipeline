@@ -50,11 +50,12 @@ FFPROBE = _find_tool("ffprobe")
 
 
 GEMINI_MODELS = [
-    os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
     "gemini-3.8-flash",
+    "gemini-2.5-flash",
 ]
 GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))
 GEMINI_TIMEOUT_MS = 120_000
@@ -95,13 +96,13 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict
 
     for attempt, model_name in enumerate(GEMINI_MODELS, 1):
         client: genai.Client | None = None
-        # Configure thinking_budget=0 to disable reasoning latency (~5s response time)
         model_config = dict(base_config)
-        try:
-            model_config["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-            gen_config = types.GenerateContentConfig(**model_config)
-        except Exception:
-            gen_config = types.GenerateContentConfig(**base_config)
+        if "2.5" in model_name:
+            try:
+                model_config["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            except Exception:
+                pass
+        gen_config = types.GenerateContentConfig(**model_config)
 
         try:
             client = _new_gemini_client(api_key)
