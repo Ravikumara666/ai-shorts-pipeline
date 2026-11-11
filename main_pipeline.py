@@ -19,6 +19,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+
+
+def call_gemini_with_fallback(client: genai.Client, contents: str, config: dict):
+    """Call Gemini API with gemini-3.8-flash, falling back to gemini-2.5-flash if needed."""
+    models_to_try = [GEMINI_MODEL]
+    if "3.8" in GEMINI_MODEL:
+        models_to_try.append("gemini-2.5-flash")
+    else:
+        models_to_try.append("gemini-3.8-flash")
+
+    last_err = None
+    for model_name in models_to_try:
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+        except Exception as e:
+            last_err = e
+            if "NOT_FOUND" in str(e) or "404" in str(e):
+                continue
+            raise
+    raise last_err or RuntimeError("Gemini model generation failed.")
+
 # =====================================================================
 # 0. TOOL PATHS — prefer Homebrew on macOS, fallback to PATH
 # =====================================================================
@@ -248,8 +274,8 @@ Generate exactly {count} BRAND NEW story entries for a YouTube Shorts vault. Req
 7. Make stories DIVERSE — different regions, time periods, character types (animals, children, kings, villagers, mythological figures)."""
 
     print(f"[Vault Refill] Generating {count} new stories with Gemini...")
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
+    response = call_gemini_with_fallback(
+        client,
         contents=prompt,
         config={
             "response_mime_type": "application/json",
@@ -331,8 +357,8 @@ INSTRUCTIONS:
         f"[Gemini] Generating '{story['series_title']}' Part {ep_num} "
         f"({story['category']})..."
     )
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
+    response = call_gemini_with_fallback(
+        client,
         contents=prompt,
         config={
             "response_mime_type": "application/json",
