@@ -29,7 +29,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-NUM_SCENES = 8
+# Scenes per episode = images generated per run (shared across all languages).
+# Lower it for a cheap smoke test, e.g. NUM_SCENES=2.
+NUM_SCENES = int(os.getenv("NUM_SCENES", "8"))
+
+# Image backend: "auto" (Gemini -> Pollinations -> HF), "gemini", "pollinations",
+# or "hf" (free FLUX.1-schnell Space — use this for a $0 free-tier test run).
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "auto").lower()
 
 
 # =====================================================================
@@ -805,15 +811,18 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
             f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo{key_query}",
         ]
 
-        print(f"[Visuals] Generating Scene {idx + 1}/{len(visual_prompts)}...")
+        print(f"[Visuals] Generating Scene {idx + 1}/{len(visual_prompts)} (provider={IMAGE_PROVIDER})...")
+
+        saved = False
 
         # Primary: Google Nano Banana image models (same GEMINI_API_KEY).
-        saved = _download_via_gemini_image(clean_prompt, img_path, seed=100 + idx)
+        if IMAGE_PROVIDER in ("auto", "gemini"):
+            saved = _download_via_gemini_image(clean_prompt, img_path, seed=100 + idx)
 
         # Secondary: Pollinations — only if an API key is configured.
         # The free unauthenticated endpoint now returns 402 Payment Required,
         # so skip it entirely without a key instead of burning retries on 402.
-        if not saved and pollinations_key:
+        if not saved and IMAGE_PROVIDER in ("auto", "pollinations") and pollinations_key:
             for attempt in range(1, 4):
                 endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
                 try:
@@ -833,8 +842,8 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
                     print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
                     time.sleep(wait)
 
-        # Tertiary: free Hugging Face FLUX.1-schnell Space.
-        if not saved:
+        # Tertiary (or primary when IMAGE_PROVIDER=hf): free Hugging Face FLUX.1-schnell Space.
+        if not saved and IMAGE_PROVIDER in ("auto", "hf"):
             saved = _download_via_hf_flux(clean_prompt, img_path, seed=100 + idx)
 
         if not saved:
