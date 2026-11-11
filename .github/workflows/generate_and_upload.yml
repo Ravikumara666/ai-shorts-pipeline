@@ -30,7 +30,9 @@ concurrency:
 jobs:
   generate-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Pipeline needs ~15-18 min (install + 8 images + 3 renders + uploads);
+    # 40 leaves headroom so a slow runner/install never kills a mid-flight render.
+    timeout-minutes: 40
 
     steps:
       - name: 📥 Checkout repository
