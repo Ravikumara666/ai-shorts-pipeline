@@ -91,6 +91,17 @@ jobs:
             python -m main_pipeline
           fi
 
+      - name: 📤 Upload rendered preview (manual runs only)
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-preview
+          path: |
+            output_build/**/final_*.mp4
+            output_build/**/shared_images/*.jpg
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: 📝 Commit updated state & vault
         run: |
           set -euo pipefail
