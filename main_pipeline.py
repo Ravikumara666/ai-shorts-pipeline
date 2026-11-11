@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageStat
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
+from google.genai.errors import APIError, ServerError, ClientError
 import edge_tts
 from dotenv import load_dotenv
 
@@ -49,9 +49,15 @@ FFMPEG = _find_tool("ffmpeg")
 FFPROBE = _find_tool("ffprobe")
 
 
-GEMINI_RETRY_MODELS = tuple(dict.fromkeys((GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash")))
+GEMINI_MODELS = [
+    os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-3.8-flash",
+]
+GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))
 GEMINI_TIMEOUT_MS = 120_000
-GEMINI_MAX_ATTEMPTS = 4
 
 
 def _new_gemini_client(api_key: str) -> genai.Client:
@@ -65,11 +71,13 @@ def _new_gemini_client(api_key: str) -> genai.Client:
     )
 
 
-def call_gemini_with_fallback(api_key: str, contents: str, config: dict):
-    """Generate structured JSON with a fresh no-keepalive client on every retry."""
+def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict] = None):
+    """Generate raw JSON using Gemini with thinking_budget=0 and detailed error logging across fallback models."""
     last_err: Exception | None = None
     retryable_errors = (
         APIError,
+        ServerError,
+        ClientError,
         httpx.HTTPError,
         httpx.ReadError,
         httpx.ConnectError,
@@ -78,31 +86,42 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: dict):
         TimeoutError,
     )
 
-    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
-        model_name = GEMINI_RETRY_MODELS[(attempt - 1) % len(GEMINI_RETRY_MODELS)]
+    base_config: dict = {
+        "response_mime_type": "application/json",
+        "temperature": 0.7,
+    }
+    if config:
+        base_config.update(config)
+
+    for attempt, model_name in enumerate(GEMINI_MODELS, 1):
         client: genai.Client | None = None
+        # Configure thinking_budget=0 to disable reasoning latency (~5s response time)
+        model_config = dict(base_config)
+        try:
+            model_config["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            gen_config = types.GenerateContentConfig(**model_config)
+        except Exception:
+            gen_config = types.GenerateContentConfig(**base_config)
+
         try:
             client = _new_gemini_client(api_key)
-            return client.models.generate_content(
+            resp = client.models.generate_content(
                 model=model_name,
                 contents=contents,
-                config=config,
+                config=gen_config,
             )
+            return resp
         except retryable_errors as exc:
             last_err = exc
-            if attempt == GEMINI_MAX_ATTEMPTS:
-                break
-            # A missing/deprecated model cannot be repaired by a new connection.
-            # Move immediately to the next configured fallback model.
-            if "NOT_FOUND" in str(exc) or "404" in str(exc):
-                print(f"[Gemini] {model_name} is unavailable; trying the next fallback model.")
+            print(f"[Gemini] {model_name} error: {exc}")
+            # If model is unavailable (404/NOT_FOUND) or rejected, immediately try next model without sleeping
+            if "NOT_FOUND" in str(exc) or "404" in str(exc) or "INVALID_ARGUMENT" in str(exc):
                 continue
-            wait_seconds = 2 ** attempt
-            print(
-                f"[Gemini] {model_name} request failed ({type(exc).__name__}: {exc}). "
-                f"Retrying with a fresh client in {wait_seconds}s..."
-            )
+            wait_seconds = 2 * attempt
             time.sleep(wait_seconds)
+        except Exception as exc:
+            last_err = exc
+            print(f"[Gemini] {model_name} error: {exc}")
         finally:
             if client is not None:
                 try:
@@ -111,7 +130,7 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: dict):
                     pass
 
     raise RuntimeError(
-        f"Gemini generation failed after {GEMINI_MAX_ATTEMPTS} fresh-client attempts: {last_err}"
+        f"Gemini generation failed across all models {GEMINI_MODELS}: {last_err}"
     ) from last_err
 
 
@@ -321,19 +340,34 @@ EXISTING STORIES (DO NOT REPEAT):
 Generate exactly {count} BRAND NEW Indian story arcs (Panchatantra, Tenali Rama, Vikram Betal, regional legends).
 Each story needs a character_visual_anchor and exactly 5 episode beats (Part 1 through 5).
 Include a specific region and source_note. If a plot is invented or heavily adapted, source_note must say so instead of making a false historical claim.
-Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num + 2).zfill(3)}, etc."""
+Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num + 2).zfill(3)}, etc.
+
+OUTPUT RAW JSON ONLY:
+{{
+  "new_stories": [
+    {{
+      "id": "story_{str(max_id_num + 1).zfill(3)}",
+      "category": "Tenali Rama Wit",
+      "region": "Vijayanagara",
+      "source_note": "Folk legend",
+      "series_title": "Tenali Rama and the Mystery",
+      "character_visual_anchor": "3D Pixar Disney animation style, clever Tenali Rama with dhoti, expressive smirk, vibrant cinematic lighting, 9:16 vertical",
+      "core_plot": "Tenali Rama solves a palace mystery using his quick wit.",
+      "episode_beats": [
+        "Part 1: The mystery begins.",
+        "Part 2: Clues emerge.",
+        "Part 3: A false suspect.",
+        "Part 4: The clever trap.",
+        "Part 5: The truth revealed."
+      ]
+    }}
+  ]
+}}"""
 
     print(f"[Vault Refill] Generating {count} new stories with Gemini...")
-    response = call_gemini_with_fallback(
-        api_key,
-        contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_schema": StoryVaultRefill,
-            "temperature": 0.7,
-        },
-    )
-    refill = StoryVaultRefill.model_validate_json(response.text)
+    response = call_gemini_with_fallback(api_key, contents=prompt)
+    clean_json = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+    refill = StoryVaultRefill.model_validate_json(clean_json)
     new_entries = [entry.model_dump() for entry in refill.new_stories]
     updated_bank = existing_bank + new_entries
     _atomic_json_write(STORY_BANK_PATH, updated_bank)
@@ -341,7 +375,7 @@ Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num +
 
 
 # =====================================================================
-# 4. GENERATE 65-75s MULTI-LANGUAGE EPISODE WITH GEMINI
+# 4. GENERATE 65-75s MULTI-LANGUAGE EPISODE WITH GEMINI (2 FAST CALLS)
 # =====================================================================
 def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -362,48 +396,136 @@ def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
         else f"End Scene 8 with an intense cliffhanger asking viewers to subscribe for Part {ep_num + 1}!"
     )
 
-    prompt = f"""You are a master Indian storyteller creating an animated YouTube Shorts episode.
+    # -------------------------------------------------------------
+    # CALL 1: English Director Blueprint (~4s)
+    # -------------------------------------------------------------
+    print(f"[Gemini] Call 1/2: Generating English Director Blueprint ({story['series_title']} Part {ep_num})...")
+    call1_prompt = f"""You are an elite Pixar/Disney animation director creating an Indian folklore animated Short.
 
 STORY DETAILS:
 - Series: {story['series_title']}
 - Category: {story['category']}
-- Region / tradition: {story.get('region', 'Indian folklore')}
-- Source framing: {story.get('source_note', 'Original dramatization')}
+- Region: {story.get('region', 'Indian folklore')}
 - Core Plot: {story['core_plot']}
-- Current Episode: Part {ep_num} of {max_ep}
+- Episode: Part {ep_num} of {max_ep}
 - Beat to Follow: {current_beat}
 - Previous Events: {state['previous_summary']}
 
 CHARACTER ANCHOR:
 {character_anchor}
 
-CRITICAL DURATION & LENGTH REQUIREMENTS (TARGET: 65 TO 75 SECONDS TOTAL):
-1. You MUST generate exactly {NUM_SCENES} progressive scenes (Scene 1 to Scene {NUM_SCENES}).
-2. In EACH of the {NUM_SCENES} scenes, write 2 to 3 full, rich, dramatic spoken sentences (at least 22-28 words per scene) in:
-   - KANNADA (Kannada script ಕನ್ನಡ)
-   - TELUGU (Telugu script తెలుగు)
-   - HINDI (Devanagari script हिन्दी)
-   Each scene narration must take 7 to 9 seconds when spoken aloud ({NUM_SCENES} scenes × 8.5s = ~68 seconds total runtime).
-3. Do NOT write brief 1-sentence summaries. Write vivid atmospheric descriptions, suspenseful narration, and character dialogue.
-4. `visual_prompts_english`: Write exactly {NUM_SCENES} concise English visual prompts (UNDER 220 CHARACTERS EACH).
-   Format: "3D Pixar Disney animation style, {character_anchor[:60]}, {{scene action/setting}}, vibrant cinematic lighting, 9:16 vertical"
-5. Start Scene 1 with a powerful hook. {finale_instruction}
-6. Provide localized YouTube titles (with Part {ep_num} and #Shorts), descriptions, and exactly 10 high-search regional tags.
-7. `episode_summary_for_next_part`: Write a 2-3 sentence summary for continuity."""
+TASK:
+1. Brainstorm 3 candidate viral hooks for Scene 1 and select the strongest winning hook.
+2. Direct exactly {NUM_SCENES} progressive visual scenes in English.
+   Each scene must have:
+   - `scene_number`: 1 to {NUM_SCENES}
+   - `story_action_visual_prompt`: Under 220 characters: "3D Pixar Disney animation style, {character_anchor[:60]}, <action/setting>, vibrant cinematic lighting, 9:16 vertical"
+   - `english_narration`: 2 full, dramatic spoken sentences (at least 20-25 words) advancing the mystery/drama.
+   - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
+3. {finale_instruction}
+4. Provide a 2-sentence `episode_summary_for_next_part`.
 
-    print(f"[Gemini] Generating '{story['series_title']}' Part {ep_num} ({NUM_SCENES} scenes for ~70s runtime)...")
-    response = call_gemini_with_fallback(
-        api_key,
-        contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_schema": MultiLangEpisode,
-            "temperature": 0.7,
-        },
+OUTPUT RAW JSON ONLY (No markdown codeblocks):
+{{
+  "winning_hook": "...",
+  "episode_summary_for_next_part": "...",
+  "scenes": [
+    {{
+      "scene_number": 1,
+      "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:55]}, staring into mysterious glowing well, vibrant cinematic lighting, 9:16 vertical",
+      "english_narration": "Deep in the ruins of Hampi, young Putta heard an eerie whisper echoing from the well. The midnight waters began to glow with ancient gold.",
+      "camera_movement_type": "push-in"
+    }}
+  ]
+}}"""
+
+    resp1 = call_gemini_with_fallback(api_key, call1_prompt)
+    raw1 = resp1.text.strip().removeprefix("```json").removesuffix("```").strip()
+    try:
+        call1_data = json.loads(raw1)
+    except Exception as e:
+        print(f"[Gemini] Error parsing Call 1 JSON: {e}\nRaw: {raw1[:300]}")
+        raise
+
+    scenes = call1_data.get("scenes", [])
+    if len(scenes) != NUM_SCENES:
+        raise ValueError(f"Call 1 must return exactly {NUM_SCENES} scenes, got {len(scenes)}")
+
+    visual_prompts_english = [
+        s.get("story_action_visual_prompt", s.get("visual_prompt", ""))
+        for s in scenes
+    ]
+
+    # -------------------------------------------------------------
+    # CALL 2: Regional Storytelling & YouTube Metadata (~5s)
+    # -------------------------------------------------------------
+    print(f"[Gemini] Call 2/2: Generating Kannada, Telugu & Hindi scripts + metadata...")
+    scenes_text = "\n".join(
+        f"Scene {s['scene_number']}: {s.get('english_narration', '')}" for s in scenes
     )
-    episode = MultiLangEpisode.model_validate_json(response.text)
+
+    call2_prompt = f"""You are a master Indian regional storyteller and YouTube Shorts SEO specialist.
+
+STORY: {story['series_title']} - Part {ep_num} of {max_ep}
+ENGLISH SCENE NARRATIONS:
+{scenes_text}
+
+TASK:
+1. Translate and dramatize each of the {NUM_SCENES} scenes into native spoken narration for:
+   - KANNADA (in Kannada script ಕನ್ನಡ)
+   - TELUGU (in Telugu script తెలుగు)
+   - HINDI (in Devanagari script हिन्दी)
+   CRITICAL: In EACH language, EACH scene must contain 2 full dramatic sentences (at least 22-28 native words) so spoken audio lasts 7-9 seconds per scene.
+2. Provide localized YouTube title (with Part {ep_num} and #Shorts), description (with hashtags), and exactly 10 high-search regional tags.
+
+OUTPUT RAW JSON ONLY (No markdown codeblocks):
+{{
+  "kannada": {{
+    "title": "ವಿಜಯನಗರದ ನಿಗೂಢ ಬಾವಿ Part {ep_num} | #Shorts",
+    "description": "ಹಂಪಿಯ ರಹಸ್ಯ ಕಥೆ... #kannada #shorts #folklore",
+    "tags": ["ಕನ್ನಡ", "ಹಂಪಿ", "ವಿಜಯನಗರ", "ಕಥೆಗಳು", "shorts", "kannada stories", "mystery", "viral", "trending", "folklore"],
+    "narration_scenes": [
+      "Scene 1 Kannada narration...",
+      "Scene 2 Kannada narration..."
+    ]
+  }},
+  "telugu": {{
+    "title": "హంపీ రహస్య బావి Part {ep_num} | #Shorts",
+    "description": "హంపీ అద్భుత కథ... #telugu #shorts #folklore",
+    "tags": ["తెలుగు", "హంపీ", "కథలు", "shorts", "telugu stories", "mystery", "viral", "trending", "folklore", "india"],
+    "narration_scenes": [
+      "Scene 1 Telugu narration...",
+      "Scene 2 Telugu narration..."
+    ]
+  }},
+  "hindi": {{
+    "title": "हम्पी की रहस्यमयी बावड़ी Part {ep_num} | #Shorts",
+    "description": "हम्पी का प्राचीन रहस्य... #hindi #shorts #kahani",
+    "tags": ["हिन्दी", "हम्पी", "कहानियां", "shorts", "hindi stories", "mystery", "viral", "trending", "folklore", "kahani"],
+    "narration_scenes": [
+      "Scene 1 Hindi narration...",
+      "Scene 2 Hindi narration..."
+    ]
+  }}
+}}"""
+
+    resp2 = call_gemini_with_fallback(api_key, call2_prompt)
+    raw2 = resp2.text.strip().removeprefix("```json").removesuffix("```").strip()
+    try:
+        call2_data = json.loads(raw2)
+    except Exception as e:
+        print(f"[Gemini] Error parsing Call 2 JSON: {e}\nRaw: {raw2[:300]}")
+        raise
+
+    episode = MultiLangEpisode(
+        episode_summary_for_next_part=call1_data.get("episode_summary_for_next_part", ""),
+        visual_prompts_english=visual_prompts_english,
+        kannada=LocalizedMetadata.model_validate(call2_data["kannada"]),
+        telugu=LocalizedMetadata.model_validate(call2_data["telugu"]),
+        hindi=LocalizedMetadata.model_validate(call2_data["hindi"]),
+    )
     validate_episode_data(episode)
-    print("[Gemini] ✅ Episode data generated successfully.")
+    print("[Gemini] ✅ Multi-language episode data generated and validated successfully!")
     return episode
 
 
