@@ -348,8 +348,22 @@ INSTRUCTIONS:
 # =====================================================================
 # 5. DOWNLOAD 5 AI IMAGES ONCE (POLLINATIONS FREE FLUX API)
 # =====================================================================
+def _generate_fallback_image(out_path: str, idx: int) -> None:
+    """Generate a clean colored vertical backdrop as resilient fallback."""
+    colors = ["0x1E3A8A", "0x14532D", "0x78350F", "0x581C87", "0x831843"]
+    color = colors[idx % len(colors)]
+    cmd = [
+        FFMPEG, "-y",
+        "-f", "lavfi",
+        "-i", f"color=c={color}:s=1080x1920:d=1",
+        "-frames:v", "1",
+        out_path,
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+
 def generate_shared_images(
-    visual_prompts: list[str], output_dir: str
+    visual_prompts: list[str], output_dir: str, mock_images: bool = False
 ) -> list[str]:
     os.makedirs(output_dir, exist_ok=True)
     image_paths: list[str] = []
@@ -363,12 +377,19 @@ def generate_shared_images(
             image_paths.append(img_path)
             continue
 
+        if mock_images:
+            print(f"[Visuals] Generating mock canvas for Scene {idx + 1}/5...")
+            _generate_fallback_image(img_path, idx)
+            image_paths.append(img_path)
+            continue
+
         encoded = urllib.parse.quote(prompt)
         url = (
             f"https://image.pollinations.ai/prompt/{encoded}"
             f"?width=1080&height=1920&seed={100 + idx}&nologo=true&model=flux"
         )
 
+        saved = False
         # Retry with exponential backoff: 5s, 10s, 20s
         for attempt in range(1, 4):
             try:
@@ -393,6 +414,7 @@ def generate_shared_images(
                     f"[Visuals] ✅ Scene {idx + 1} saved "
                     f"({len(resp.content) // 1024} KB)"
                 )
+                saved = True
                 break
             except (requests.RequestException, IOError, ValueError) as e:
                 wait = 5 * (2 ** (attempt - 1))  # 5, 10, 20
@@ -400,12 +422,11 @@ def generate_shared_images(
                     f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. "
                     f"Retrying in {wait}s..."
                 )
-                if attempt == 3:
-                    sys.exit(
-                        f"[FATAL] Failed to download Scene {idx + 1} "
-                        f"after 3 attempts."
-                    )
                 time.sleep(wait)
+
+        if not saved:
+            print(f"[Visuals] ⚠️  Pollinations unavailable for Scene {idx + 1}; using colored backdrop fallback.")
+            _generate_fallback_image(img_path, idx)
 
         image_paths.append(img_path)
 
@@ -659,6 +680,7 @@ async def main() -> None:
     parser.add_argument("--skip-upload", action="store_true", help="Render videos only; do not upload to YouTube")
     parser.add_argument("--dry-run", action="store_true", help="Run without persisting updated story state or vault")
     parser.add_argument("--mock", action="store_true", help="Use built-in mock script (no Gemini API calls)")
+    parser.add_argument("--mock-images", action="store_true", help="Use local synthetic test canvases instead of downloading from Pollinations")
     parser.add_argument("--episode", type=int, default=None, help="Force a specific episode number")
     args = parser.parse_args()
 
@@ -696,6 +718,7 @@ async def main() -> None:
     images = generate_shared_images(
         episode_data.visual_prompts_english,
         os.path.join(work_dir, "shared_images"),
+        mock_images=args.mock_images,
     )
 
     # Step 3: Ensure background music track exists
