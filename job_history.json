@@ -1,1 +1,23 @@
-{}
+{
+  "story_001_ep1": {
+    "story_id": "story_001",
+    "episode": 1,
+    "prompt_hash": "6d065bed980ecad60e15a2ca4bdbd3dcd9e23d0c86f1e031a79e70235df51298",
+    "status": "rendered",
+    "manifest_path": "output_build/story_001_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "pending",
+        "video_id": null
+      },
+      "te": {
+        "status": "pending",
+        "video_id": null
+      },
+      "hi": {
+        "status": "pending",
+        "video_id": null
+      }
+    }
+  }
+}
