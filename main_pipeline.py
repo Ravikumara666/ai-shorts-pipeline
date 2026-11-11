@@ -52,10 +52,10 @@ FFPROBE = _find_tool("ffprobe")
 GEMINI_MODELS = [
     os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
     "gemini-3.5-flash",
-    "gemini-flash-latest",
     "gemini-3.8-flash",
-    "gemini-2.5-flash",
 ]
 GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))
 GEMINI_TIMEOUT_MS = 120_000
@@ -73,7 +73,7 @@ def _new_gemini_client(api_key: str) -> genai.Client:
 
 
 def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict] = None):
-    """Generate raw JSON using Gemini with thinking_budget=0 and detailed error logging across fallback models."""
+    """Generate raw JSON using Gemini across active flash-lite models with automatic retry on 503."""
     last_err: Exception | None = None
     retryable_errors = (
         APIError,
@@ -94,41 +94,40 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict
     if config:
         base_config.update(config)
 
-    for attempt, model_name in enumerate(GEMINI_MODELS, 1):
-        client: genai.Client | None = None
+    for model_name in GEMINI_MODELS:
         model_config = dict(base_config)
-        if "2.5" in model_name:
-            try:
-                model_config["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-            except Exception:
-                pass
         gen_config = types.GenerateContentConfig(**model_config)
 
-        try:
-            client = _new_gemini_client(api_key)
-            resp = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=gen_config,
-            )
-            return resp
-        except retryable_errors as exc:
-            last_err = exc
-            print(f"[Gemini] {model_name} error: {exc}")
-            # If model is unavailable (404/NOT_FOUND) or rejected, immediately try next model without sleeping
-            if "NOT_FOUND" in str(exc) or "404" in str(exc) or "INVALID_ARGUMENT" in str(exc):
-                continue
-            wait_seconds = 2 * attempt
-            time.sleep(wait_seconds)
-        except Exception as exc:
-            last_err = exc
-            print(f"[Gemini] {model_name} error: {exc}")
-        finally:
-            if client is not None:
-                try:
-                    client.close()
-                except Exception:
-                    pass
+        # Retry up to 3 times per model for temporary 503/timeout spikes
+        for model_attempt in range(1, 4):
+            client: genai.Client | None = None
+            try:
+                client = _new_gemini_client(api_key)
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=gen_config,
+                )
+                return resp
+            except retryable_errors as exc:
+                last_err = exc
+                err_str = str(exc)
+                print(f"[Gemini] {model_name} (attempt {model_attempt}/3) error: {exc}")
+                # If model is unavailable (404/NOT_FOUND) or quota exhausted (429), move to next model immediately
+                if "NOT_FOUND" in err_str or "404" in err_str or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    break
+                # On 503 or transient network error, wait a couple seconds and retry the same model
+                time.sleep(2 * model_attempt)
+            except Exception as exc:
+                last_err = exc
+                print(f"[Gemini] {model_name} unexpected error: {exc}")
+                break
+            finally:
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
 
     raise RuntimeError(
         f"Gemini generation failed across all models {GEMINI_MODELS}: {last_err}"
@@ -458,72 +457,78 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
     ]
 
     # -------------------------------------------------------------
-    # CALL 2: Regional Storytelling & YouTube Metadata (~5s)
+    # CALL 2: Per-Language Regional Storytelling & YouTube Metadata (~2s each)
     # -------------------------------------------------------------
-    print(f"[Gemini] Call 2/2: Generating Kannada, Telugu & Hindi scripts + metadata...")
     scenes_text = "\n".join(
         f"Scene {s['scene_number']}: {s.get('english_narration', '')}" for s in scenes
     )
 
-    call2_prompt = f"""You are a master Indian regional storyteller and YouTube Shorts SEO specialist.
+    lang_specs = {
+        "kannada": {
+            "name": "Kannada",
+            "script": "Kannada script ಕನ್ನಡ",
+            "example_title": f"{story['series_title']} Part {ep_num} | #Shorts",
+            "example_desc": f"ಹಂಪಿಯ ನಿಗೂಢ ಕಥೆ Part {ep_num} #kannada #shorts #folklore",
+            "example_tags": ["ಕನ್ನಡ", "ಹಂಪಿ", "ವಿಜಯನಗರ", "ಕಥೆಗಳು", "shorts", "kannada stories", "mystery", "viral", "trending", "folklore"],
+        },
+        "telugu": {
+            "name": "Telugu",
+            "script": "Telugu script తెలుగు",
+            "example_title": f"{story['series_title']} Part {ep_num} | #Shorts",
+            "example_desc": f"హంపీ రహస్య కథ Part {ep_num} #telugu #shorts #folklore",
+            "example_tags": ["తెలుగు", "హంపీ", "కథలు", "shorts", "telugu stories", "mystery", "viral", "trending", "folklore", "india"],
+        },
+        "hindi": {
+            "name": "Hindi",
+            "script": "Devanagari script हिन्दी",
+            "example_title": f"{story['series_title']} Part {ep_num} | #Shorts",
+            "example_desc": f"हम्पी की रहस्यमयी कहानी Part {ep_num} #hindi #shorts #kahani",
+            "example_tags": ["हिन्दी", "हम्पी", "कहानियां", "shorts", "hindi stories", "mystery", "viral", "trending", "folklore", "kahani"],
+        },
+    }
+
+    localized_results: dict[str, LocalizedMetadata] = {}
+
+    for lang_key, spec in lang_specs.items():
+        print(f"[Gemini] Generating {spec['name']} narration and metadata...")
+        call_prompt = f"""You are a master {spec['name']} storyteller and YouTube Shorts creator.
 
 STORY: {story['series_title']} - Part {ep_num} of {max_ep}
 ENGLISH SCENE NARRATIONS:
 {scenes_text}
 
 TASK:
-1. Translate and dramatize each of the {NUM_SCENES} scenes into native spoken narration for:
-   - KANNADA (in Kannada script ಕನ್ನಡ)
-   - TELUGU (in Telugu script తెలుగు)
-   - HINDI (in Devanagari script हिन्दी)
-   CRITICAL: In EACH language, EACH scene must contain 2 full dramatic sentences (at least 22-28 native words) so spoken audio lasts 7-9 seconds per scene.
-2. Provide localized YouTube title (with Part {ep_num} and #Shorts), description (with hashtags), and exactly 10 high-search regional tags.
+1. Translate and dramatically adapt each of the {NUM_SCENES} scenes into native {spec['name']} ({spec['script']}).
+   CRITICAL: EACH scene MUST have 2 full dramatic spoken sentences (at least 22-28 native words) for a 7-9 second voiceover per scene.
+2. Provide a localized YouTube title (with Part {ep_num} and #Shorts), description (with 3-4 hashtags), and exactly 10 high-search regional tags.
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
 {{
-  "kannada": {{
-    "title": "ವಿಜಯನಗರದ ನಿಗೂಢ ಬಾವಿ Part {ep_num} | #Shorts",
-    "description": "ಹಂಪಿಯ ರಹಸ್ಯ ಕಥೆ... #kannada #shorts #folklore",
-    "tags": ["ಕನ್ನಡ", "ಹಂಪಿ", "ವಿಜಯನಗರ", "ಕಥೆಗಳು", "shorts", "kannada stories", "mystery", "viral", "trending", "folklore"],
-    "narration_scenes": [
-      "Scene 1 Kannada narration...",
-      "Scene 2 Kannada narration..."
-    ]
-  }},
-  "telugu": {{
-    "title": "హంపీ రహస్య బావి Part {ep_num} | #Shorts",
-    "description": "హంపీ అద్భుత కథ... #telugu #shorts #folklore",
-    "tags": ["తెలుగు", "హంపీ", "కథలు", "shorts", "telugu stories", "mystery", "viral", "trending", "folklore", "india"],
-    "narration_scenes": [
-      "Scene 1 Telugu narration...",
-      "Scene 2 Telugu narration..."
-    ]
-  }},
-  "hindi": {{
-    "title": "हम्पी की रहस्यमयी बावड़ी Part {ep_num} | #Shorts",
-    "description": "हम्पी का प्राचीन रहस्य... #hindi #shorts #kahani",
-    "tags": ["हिन्दी", "हम्पी", "कहानियां", "shorts", "hindi stories", "mystery", "viral", "trending", "folklore", "kahani"],
-    "narration_scenes": [
-      "Scene 1 Hindi narration...",
-      "Scene 2 Hindi narration..."
-    ]
-  }}
+  "title": "{spec['example_title']}",
+  "description": "{spec['example_desc']}",
+  "tags": {json.dumps(spec['example_tags'], ensure_ascii=False)},
+  "narration_scenes": [
+    "Scene 1 {spec['name']} narration...",
+    "Scene 2 {spec['name']} narration..."
+  ]
 }}"""
 
-    resp2 = call_gemini_with_fallback(api_key, call2_prompt)
-    raw2 = resp2.text.strip().removeprefix("```json").removesuffix("```").strip()
-    try:
-        call2_data = json.loads(raw2)
-    except Exception as e:
-        print(f"[Gemini] Error parsing Call 2 JSON: {e}\nRaw: {raw2[:300]}")
-        raise
+        resp = call_gemini_with_fallback(api_key, call_prompt)
+        raw_json = resp.text.strip().removeprefix("```json").removesuffix("```").strip()
+        try:
+            data = json.loads(raw_json)
+            meta = LocalizedMetadata.model_validate(data)
+            localized_results[lang_key] = meta
+        except Exception as e:
+            print(f"[Gemini] Error parsing {spec['name']} JSON: {e}\nRaw: {raw_json[:200]}")
+            raise
 
     episode = MultiLangEpisode(
         episode_summary_for_next_part=call1_data.get("episode_summary_for_next_part", ""),
         visual_prompts_english=visual_prompts_english,
-        kannada=LocalizedMetadata.model_validate(call2_data["kannada"]),
-        telugu=LocalizedMetadata.model_validate(call2_data["telugu"]),
-        hindi=LocalizedMetadata.model_validate(call2_data["hindi"]),
+        kannada=localized_results["kannada"],
+        telugu=localized_results["telugu"],
+        hindi=localized_results["hindi"],
     )
     validate_episode_data(episode)
     print("[Gemini] ✅ Multi-language episode data generated and validated successfully!")
