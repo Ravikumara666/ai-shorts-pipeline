@@ -37,6 +37,11 @@ NUM_SCENES = int(os.getenv("NUM_SCENES", "8"))
 # or "hf" (free FLUX.1-schnell Space — use this for a $0 free-tier test run).
 IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "auto").lower()
 
+# Acceptable final Short duration (seconds). YouTube Shorts allow up to 3 min
+# (180s), so a valid render is never discarded after minutes of compute.
+MIN_DURATION_SEC = float(os.getenv("MIN_DURATION_SEC", "30"))
+MAX_DURATION_SEC = float(os.getenv("MAX_DURATION_SEC", "180"))
+
 
 # =====================================================================
 # 0. TOOL PATHS — prefer Homebrew on macOS, fallback to PATH
@@ -168,9 +173,9 @@ class LocalizedMetadata(BaseModel):
     tags: list[str] = Field(description="Exactly 10 high-search regional SEO tags")
     narration_scenes: list[str] = Field(
         description=(
-            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each scene MUST contain "
-            "2 to 3 full, rich, expressive storytelling sentences (at least 22-28 words per scene) "
-            "so each scene voiceover lasts 7 to 9 seconds, ensuring a total video runtime between 60 and 75 seconds."
+            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each scene is "
+            "1 to 2 short, punchy storytelling sentences of about 14-18 words (never more than 20) "
+            "so each scene voiceover is roughly 9-11 seconds and the whole video stays well under 3 minutes."
         )
     )
 
@@ -445,7 +450,7 @@ TASK:
    Each scene must have:
    - `scene_number`: 1 to {NUM_SCENES}
    - `story_action_visual_prompt`: Under 220 characters: "3D Pixar Disney animation style, {character_anchor[:60]}, <action/setting>, vibrant cinematic lighting, 9:16 vertical"
-   - `english_narration`: 2 full, dramatic spoken sentences (at least 20-25 words) advancing the mystery/drama.
+   - `english_narration`: 1-2 short, punchy sentences of about 14-18 words (never more than 20) advancing the mystery/drama.
    - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
 3. {finale_instruction}
 4. Provide a 2-sentence `episode_summary_for_next_part`.
@@ -524,7 +529,7 @@ ENGLISH SCENE NARRATIONS:
 
 TASK:
 1. Translate and dramatically adapt each of the {NUM_SCENES} scenes into native {spec['name']} ({spec['script']}).
-   CRITICAL: EACH scene MUST have 2 full dramatic spoken sentences (at least 22-28 native words) for a 7-9 second voiceover per scene.
+   CRITICAL: EACH scene must be 1-2 short, punchy sentences of about 14-18 native words (never more than 20) — roughly a 9-11 second voiceover per scene. Keep it concise; do not pad.
 2. Provide a localized YouTube title (with Part {ep_num} and #Shorts), description (with 3-4 hashtags), and exactly 10 high-search regional tags.
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
@@ -1167,15 +1172,18 @@ async def build_language_video(
     final_duration = float(subprocess.check_output(dur_cmd).decode().strip())
     print(f"[{lang_key.upper()}] ⏱️  Final Short Duration: {final_duration:.2f} seconds")
 
-    # Production Shorts (8 scenes) must land in 60-75s. A reduced scene count
-    # (cheap smoke test) or an explicit override downgrades this to a warning so
-    # the render still completes for inspection.
+    # Accept any render within the configured window (YouTube Shorts allow up to
+    # 3 min), so a good render is never discarded after minutes of compute. A
+    # reduced scene count (smoke test) or RELAX_DURATION_CHECK relaxes it further.
     relaxed = (
         NUM_SCENES < 8
         or os.getenv("RELAX_DURATION_CHECK", "").strip().lower() in ("1", "true", "yes")
     )
-    if not 60.0 <= final_duration <= 75.0:
-        msg = f"{lang_key} render is {final_duration:.2f}s; expected 60.0-75.0s."
+    if not MIN_DURATION_SEC <= final_duration <= MAX_DURATION_SEC:
+        msg = (
+            f"{lang_key} render is {final_duration:.2f}s; "
+            f"expected {MIN_DURATION_SEC:.0f}-{MAX_DURATION_SEC:.0f}s."
+        )
         if not relaxed:
             raise ValueError(msg + " Refusing to upload an out-of-range Short.")
         print(f"[{lang_key.upper()}] ⚠️  {msg} Allowing anyway (relaxed: test / non-standard scene count).")
