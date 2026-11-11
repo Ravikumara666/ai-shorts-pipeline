@@ -1,1 +1,23 @@
-{}
+{
+  "story_001_ep1": {
+    "story_id": "story_001",
+    "episode": 1,
+    "prompt_hash": "ece64e0cf162e0a29ede113854ec0d402a315b6bc194a134b323ca2c4cc2edfe",
+    "status": "completed",
+    "manifest_path": "output_build/story_001_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "M-LCuy1maHo"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "gKHX4f747_w"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "fQafiHSDtMo"
+      }
+    }
+  }
+}
