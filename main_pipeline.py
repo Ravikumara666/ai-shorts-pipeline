@@ -68,10 +68,14 @@ FFPROBE = _find_tool("ffprobe")
 # =====================================================================
 class LocalizedMetadata(BaseModel):
     title: str = Field(description="YouTube title with Part X and #Shorts, max 100 chars")
-    description: str = Field(description="YouTube description with 3-4 hashtags and SEO keywords")
+    description: str = Field(description="YouTube description with 3-4 hashtags and SEO keywords, max 5000 chars")
     tags: list[str] = Field(description="Exactly 10 high-search regional SEO tags")
     narration_scenes: list[str] = Field(
-        description="Exactly 5 voiceover narrations in native script, 2-3 sentences each"
+        description=(
+            "Exactly 5 voiceover narrations in native script. Each scene MUST contain "
+            "3 to 4 detailed dramatic sentences (approx. 40 to 50 words per scene) "
+            "so that each spoken scene is 10 to 12 seconds long, guaranteeing a 50-60 second total Short length."
+        )
     )
 
 
@@ -338,20 +342,25 @@ STORY DETAILS:
 CHARACTER VISUAL ANCHOR (use this EXACT description at the START of every visual prompt):
 {character_anchor}
 
+CRITICAL DURATION & LENGTH REQUIREMENT (TARGET: 50 TO 60 SECONDS TOTAL):
+- YouTube Shorts retention requires the total video to be between 50 and 60 seconds (approx 1 minute).
+- You MUST write exactly 5 scenes.
+- In EACH scene, write 3 to 4 full, rich, dramatic spoken sentences in the native script (approx. 40-50 words per scene).
+- Each scene voiceover MUST take 10 to 12 seconds when spoken aloud by TTS (5 scenes × 11 seconds = ~55 seconds total video duration).
+- DO NOT write brief 1-sentence summaries. Write vivid character dialogue, sensory atmosphere, sound descriptions, and dramatic suspense.
+
 INSTRUCTIONS:
-1. Create exactly 5 scenes for a ~50-second Short, following the episode beat above.
-2. `visual_prompts_english`: Write 5 DETAILED English visual prompts.
+1. `visual_prompts_english`: Write 5 DETAILED English visual prompts.
    - Each prompt MUST START with the character visual anchor text above for visual consistency across episodes.
-   - Then add the scene-specific action, setting, and emotion.
-   - End each with: '9:16 vertical portrait layout, cinematic lighting'
-3. Write the matching 5-scene voiceover narration in natural, engaging spoken:
+   - Then add the scene-specific action, setting, lighting, and emotion.
+   - End each with: '9:16 vertical portrait layout, cinematic 3D Pixar Disney animation style, rich vibrant textures, dramatic lighting'
+2. Write the matching 5-scene voiceover narration (3-4 full sentences each) in natural, engaging spoken:
    - KANNADA (Kannada script ಕನ್ನಡ)
    - TELUGU (Telugu script తెలుగు)
    - HINDI (Devanagari script हिन्दी)
-   Each scene narration should be 2-3 sentences of dramatic storytelling.
-4. Start Scene 1 with a strong hook. {finale_instruction}
-5. Provide localized YouTube titles (include 'Part {ep_num}' and '#Shorts'), descriptions with 3-4 relevant hashtags, and exactly 10 high-search regional tags for each language.
-6. `episode_summary_for_next_part`: Write a 2-3 sentence summary of this episode's events for continuity."""
+3. Start Scene 1 with a powerful gripping hook. {finale_instruction}
+4. Provide localized YouTube titles (include 'Part {ep_num}' and '#Shorts'), descriptions with 3-4 relevant hashtags, and exactly 10 high-search regional tags for each language.
+5. `episode_summary_for_next_part`: Write a 2-3 sentence summary of this episode's events for continuity."""
 
     print(
         f"[Gemini] Generating '{story['series_title']}' Part {ep_num} "
@@ -397,9 +406,9 @@ def generate_shared_images(
     for idx, prompt in enumerate(visual_prompts):
         img_path = os.path.join(output_dir, f"scene_{idx}.jpg")
 
-        # Skip if already downloaded (re-run resilience)
-        if os.path.isfile(img_path) and os.path.getsize(img_path) > 10_000:
-            print(f"[Visuals] Scene {idx + 1}/5 already exists, skipping.")
+        # Skip if already downloaded (re-run resilience — must be a real image > 30KB)
+        if os.path.isfile(img_path) and os.path.getsize(img_path) > 30_000:
+            print(f"[Visuals] Scene {idx + 1}/5 already exists ({os.path.getsize(img_path) // 1024} KB), skipping.")
             image_paths.append(img_path)
             continue
 
@@ -556,10 +565,23 @@ async def build_language_video(
         total_seg_duration = duration + 0.35
         frames = int(total_seg_duration * 30) + 5
 
-        # 3. Base Ken Burns zoompan filter
+        # 3. Dynamic multi-style Ken Burns camera animation per scene
+        if i % 4 == 0:
+            # Cinematic Slow Zoom-In to character focal point
+            cam_expr = f"zoompan=z='min(zoom+0.0016,1.35)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
+        elif i % 4 == 1:
+            # Cinematic Slow Zoom-Out revealing wider mythical world
+            cam_expr = f"zoompan=z='if(lte(zoom,1.0),1.3,max(1.001,zoom-0.0013))':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
+        elif i % 4 == 2:
+            # Slow vertical cinematic tilt / upward pan
+            cam_expr = f"zoompan=z='1.25':d={frames}:x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/{frames})':s=1080x1920:fps=30"
+        else:
+            # Slow horizontal cinematic pan across frame
+            cam_expr = f"zoompan=z='1.25':d={frames}:x='(iw-iw/zoom)*(on/{frames})':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
+
         vf_filters = [
             "scale=1080:1920",
-            f"zoompan=z='min(zoom+0.0012,1.3)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30",
+            cam_expr,
         ]
 
         # 4. Burn-in subtitles if filter is supported (MarginV=280 safe zone, yellow font with black outline)
@@ -665,11 +687,11 @@ def get_mock_episode_data(story: dict, ep_num: int) -> MultiLangEpisode:
             description=f"ಕನ್ನಡದಲ್ಲಿ ಸುಂದರ ಕಥೆ - {story['series_title']} ಭಾಗ {ep_num}. #Shorts #KannadaStories #Folklore",
             tags=["ಕನ್ನಡ ಕಥೆಗಳು", "Kannada Stories", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Hampi", "Karnataka"],
             narration_scenes=[
-                "ಒಂದು ಕಾಲದಲ್ಲಿ ಹಂಪಿಯ ಪವಿತ್ರ ನೆಲದಲ್ಲಿ ಒಂದು ಅದ್ಭುತ ರಹಸ್ಯ ಅಡಗಿತ್ತು.",
-                "ಬುದ್ಧಿವಂತ ಪುಟ್ಟ ತನ್ನ ಪುಟ್ಟ ಗಿಳಿಯೊಂದಿಗೆ ಹಳೆಯ ಬಾವಿಯ ಬಳಿ ನಿಂತಿದ್ದನು.",
-                "ನೀರಿನ ಒಳಗಿನಿಂದ ನಿಗೂಢ ಧ್ವನಿಯೊಂದು ಅವನ ಹೆಸರನ್ನು ಕರೆಯುತ್ತಿತ್ತು.",
-                "ಬಾವಿಯ ಮೆಟ್ಟಿಲುಗಳ ಮೇಲೆ ಚಿನ್ನದ ಕೀಲಿಯೊಂದು ಪ್ರಕಾಶಮಾನವಾಗಿ ಹೊಳೆಯುತ್ತಿತ್ತು.",
-                "ಆದರೆ ಆ ಕೀಲಿಯನ್ನು ಮುಟ್ಟಿದರೆ ಏನಾಗುತ್ತದೆ? ಮುಂದಿನ ಭಾಗವನ್ನು ನೋಡಲು ಈಗಲೇ ಸಬ್ಸ್ಕ್ರೈಬ್ ಮಾಡಿ!"
+                "ಒಂದು ಕಾಲದಲ್ಲಿ ವಿಜಯನಗರದ ವೈಭವದ ಹಂಪಿಯ ಪವಿತ್ರ ನೆಲದಲ್ಲಿ ಒಂದು ಅದ್ಭುತ ರಹಸ್ಯ ಅಡಗಿತ್ತು. ನಡುರಾತ್ರಿಯ ಕತ್ತಲೆಯಲ್ಲಿ ಹಳೆಯ ಕಲ್ಯಾಣಿಯ ಮೆಟ್ಟಿಲುಗಳು ನಿಗೂಢವಾಗಿ ಬೆಳಗುತ್ತಿದ್ದವು. ಪುರಾತನ ಕಥೆಗಳ ಪ್ರಕಾರ, ಈ ಬಾವಿಯಲ್ಲಿ ರಾಜಮನೆತನದ ಅಪಾರ ನಿಧಿಯಿತ್ತು.",
+                "ಬುದ್ಧಿವಂತ ಹನ್ನೆರಡು ವರ್ಷದ ಪುಟ್ಟ ತನ್ನ ಹೆಗಲ ಮೇಲಿನ ಪುಟ್ಟ ಹಸಿರು ಗಿಳಿಯೊಂದಿಗೆ ಕಲ್ಯಾಣಿಯ ಹತ್ತಿರ ಬಂದನು. ತಣ್ಣನೆಯ ಗಾಳಿ ಬೀಸುತ್ತಿತ್ತು, ದೂರದಲ್ಲಿ ಗಂಟೆಯ ನಾದ ಕೇಳಿಸುತ್ತಿತ್ತು. ಅವನ ಮುದ್ದಾದ ಗಿಳಿ ಮೀನಾ ಎಚ್ಚರಿಕೆಯಿಂದ ಸುತ್ತಲೂ ನೋಡುತ್ತಿತ್ತು.",
+                "ಹಠಾತ್ತಾಗಿ ನೀರಿನ ಒಳಗಿನಿಂದ ಒಂದು ನಿಗೂಢ ಗಂಭೀರ ಧ್ವನಿಯೊಂದು ಪುಟ್ಟನ ಹೆಸರನ್ನು ಕರೆಯಿತು. ನೀರಿನ ಮೇಲೆ ವಿಚಿತ್ರ ತರಂಗಗಳು ಮೂಡಿ, ನೀರಿನ ಆಳದಲ್ಲಿ ಹೊಳೆಯುವ ಬೆಳಕು ಕಾಣಿಸಿತು. ಪುಟ್ಟ ಭಯಪಡದೆ ಧೈರ್ಯದಿಂದ ಮೆಟ್ಟಿಲುಗಳನ್ನು ಇಳಿಯಲು ಪ್ರಾರಂಭಿಸಿದನು.",
+                "ಬಾವಿಯ ಕೊನೆಯ ಮೆಟ್ಟಿಲಿನ ಮೇಲೆ ಒಂದು ದೈವಿಕ ಚಿನ್ನದ ಕೀಲಿಯು ಪ್ರಕಾಶಮಾನವಾಗಿ ಹೊಳೆಯುತ್ತಿತ್ತು. ಆದರೆ ಆ ಕೀಲಿಯನ್ನು ರಕ್ಷಿಸಲು ನೀರಿನಿಂದ ಬೃಹತ್ ಕಲ್ಲಿನ ಯಕ್ಷನ ನೆರಳು ಮೇಲೆದ್ದಿತು. ಯಕ್ಷನು ಮೂರು ಕಠಿಣ ಒಗಟುಗಳನ್ನು ಬಿಡಿಸಬೇಕೆಂದು ಆಜ್ಞಾಪಿಸಿದನು.",
+                "ಪುಟ್ಟ ಆ ಭಯಾನಕ ಯಕ್ಷನ ಒಗಟುಗಳನ್ನು ಬಿಡಿಸಿ ಆ ಚಿನ್ನದ ಕೀಲಿಯನ್ನು ಪಡೆಯುತ್ತಾನಾ? ಅಥವಾ ಕಲ್ಲಿನ ಶಾಪಕ್ಕೆ ಬಲಿಯಾಗುತ್ತಾನಾ? ರೋಚಕ ಮುಂದಿನ ಭಾಗವನ್ನು ನೋಡಲು ಈಗಲೇ ಸಬ್ಸ್ಕ್ರೈಬ್ ಮಾಡಿ ಮತ್ತು ಕಾಮೆಂಟ್ ಮಾಡಿ!"
             ]
         ),
         telugu=LocalizedMetadata(
@@ -677,11 +699,11 @@ def get_mock_episode_data(story: dict, ep_num: int) -> MultiLangEpisode:
             description=f"తెలుగులో అద్భుతమైన కథ - {story['series_title']} భాగం {ep_num}. #Shorts #TeluguStories #Folklore",
             tags=["తెలుగు కథలు", "Telugu Stories", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Tenali Rama", "Andhra"],
             narration_scenes=[
-                "ఒకప్పుడు హంపీ పవిత్ర భూమిలో ఒక అద్భుతమైన రహస్యం దాగి ఉంది.",
-                "తెలివైన పుట్టా తన చిన్న చిలుకతో కలిసి పాత బావి వద్ద నిలబడ్డాడు.",
-                "నీటి లోపలి నుండి ఒక వింత శబ్దం అతని పేరును పిలుస్తోంది.",
-                "బావి మెట్లపై బంగారు తాళంచెవి కాంతివంతంగా మెరుస్తోంది.",
-                "కానీ ఆ తాళంచెవిని ముట్టుకుంటే ఏమవుతుంది? తరువాతి భాగం కోసం ఇప్పుడే సబ్‌స్క్రైబ్ చేయండి!"
+                "ఒకప్పుడు విజయనగర సామ్రాజ్య వైభవంలో హంపీ పవిత్ర భూమిలో ఒక అద్భుత రహస్యం దాగి ఉంది. అర్ధరాత్రి చీకటిలో ప్రాచీన దిగుడుబావి మెట్లు వింతగా మెరుస్తున్నాయి. పురాతన గాథల ప్రకారం, ఈ బావిలో రాజవంశపు అమూల్యమైన సంపద దాగి ఉంది.",
+                "తెలివైన పన్నెండేళ్ల పుట్టా తన భుజంపై ఉన్న పచ్చని చిలుకతో కలిసి బావి వద్దకు చేరుకున్నాడు. చల్లని గాలి వీస్తోంది, దూరంగా గుడి గంటల నాదం వినిపిస్తోంది. అతని చిలుక మీనా ఎంతో అప్రమత్తంగా చుట్టూ గమనిస్తోంది.",
+                "హఠాత్తుగా నీటి లోపలి నుండి ఒక గంభీరమైన రహస్య స్వరం పుట్టా పేరును పిలిచింది. నీటి అలలపై దివ్యమైన కాంతులు వెల్లివిరిశాయి, అడుగున ఏదో మెరుస్తోంది. పుట్టా ఏమాత్రం భయపడకుండా ధైర్యంగా మెట్లు దిగడం ప్రారంభించాడు.",
+                "బావి చివరి మెట్టుపై ఒక అద్భుతమైన బంగారు తాళంచెవి కాంతివంతంగా మెరుస్తోంది. కానీ ఆ తాళంచెవిని తాకగానే నీటి నుండి ఒక భయంకర రాతి యక్షుడి నీడ ఉద్భవించింది. ఆ యక్షుడు మూడు కఠినమైన చిక్కుప్రశ్నలకు సమాధానం చెప్పమని హెచ్చరించాడు.",
+                "పుట్టా ఆ రాతి యక్షుడి ప్రశ్నలను ఛేదించి బంగారు తాళంచెవిని దక్కించుకుంటాడా? లేక రాతి శాపానికి గురవుతాడా? ఉత్కంఠభరితమైన తరువాతి భాగం కోసం ఇప్పుడే సబ్‌స్క్రైబ్ చేయండి మరియు కామెంట్ చేయండి!"
             ]
         ),
         hindi=LocalizedMetadata(
@@ -689,11 +711,11 @@ def get_mock_episode_data(story: dict, ep_num: int) -> MultiLangEpisode:
             description=f"हम्पी की जादुई लोककथा - {story['series_title']} भाग {ep_num}. #Shorts #HindiKahaniya #Folklore",
             tags=["हिंदी कहानियां", "Hindi Kahaniya", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Tenali Raman", "Indian Myths"],
             narration_scenes=[
-                "एक समय की बात है, हम्पी की पवित्र भूमि में एक अनोखा रहस्य छिपा हुआ था।",
-                "चतुर पुट्टा अपने छोटे तोते के साथ पुराने कुएं के पास खड़ा था।",
-                "कुएं के गहरे पानी से एक रहस्यमयी आवाज उसका नाम पुकार रही थी।",
-                "सीढ़ियों पर एक जादुई सुनहरी चाबी दिव्य प्रकाश से चमक रही थी।",
-                "लेकिन उस चाबी को छूते ही क्या होगा? अगला भाग देखने के लिए अभी सब्सक्राइब करें!"
+                "एक समय की बात है, विजयनगर साम्राज्य की पावन धरती हम्पी में एक अद्भुत रहस्य छिपा हुआ था। आधी रात के सन्नाटे में पुरानी बावड़ी की सीढ़ियां रहस्यमयी रोशनी से जगमगाने लगती थीं। मान्यताओं के अनुसार, इस बावड़ी के भीतर शाही खजाना दफन था।",
+                "चतुर बारह साल का बालक पुट्टा अपने कंधे पर बैठे नन्हे हरे तोते के साथ उस बावड़ी के किनारे पहुंचा। ठंडी हवाएं चल रही थीं और दूर किसी मंदिर की घंटी की गूंज सुनाई दे रही थी। उसका तोता मीना चौकन्ना होकर चारों ओर देख रहा था।",
+                "अचानक गहरे पानी के भीतर से एक भारी और रहस्यमयी आवाज ने पुट्टा का नाम पुकारा। पानी की लहरों में एक चमत्कारी दिव्य प्रकाश चमकने लगा। पुट्टा बिना डरे साहस जुटाकर धीरे-धीरे बावड़ी की सीढ़ियां उतरने लगा।",
+                "बावड़ी की सबसे निचली सीढ़ी पर एक प्राचीन सुनहरी जादुई चाबी दिव्य तेज से चमक रही थी। लेकिन जैसे ही पुट्टा आगे बढ़ा, पानी से एक विशाल पत्थर के यक्ष की भयानक छाया प्रकट हुई। यक्ष ने गरजकर तीन कठिन पहेलियों का हल मांगा।",
+                "क्या पुट्टा अपनी बुद्धिमानी से यक्ष की पहेलियों को सुलझा पाएगा या पत्थर का बन जाएगा? इस रोमांचक कहानी का अगला भाग देखने के लिए अभी सब्सक्राइब करें और कमेंट में बताएं!"
             ]
         )
     )
