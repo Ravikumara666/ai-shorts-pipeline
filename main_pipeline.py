@@ -9,6 +9,7 @@ import shutil
 import time
 import urllib.parse
 import io
+import re
 import textwrap
 from pathlib import Path
 from typing import Optional
@@ -376,13 +377,27 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_ap
         ]
 
         saved = False
-        hit_402 = False
 
-        for attempt in range(1, 4):
+        for attempt in range(1, 6):
             endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
             try:
-                print(f"[Visuals] Downloading Scene {idx + 1}/{len(visual_prompts)} (attempt {attempt}/3)...")
+                print(f"[Visuals] Downloading Scene {idx + 1}/{len(visual_prompts)} (attempt {attempt}/5)...")
                 resp = requests.get(endpoint_url, headers=headers, timeout=90)
+
+                if resp.status_code == 402:
+                    wait_sec = 35
+                    try:
+                        err_json = resp.json()
+                        msg = err_json.get("error", {}).get("message", "")
+                        match = re.search(r"Retry after (\d+)s", msg)
+                        if match:
+                            wait_sec = int(match.group(1)) + 3
+                    except Exception:
+                        pass
+                    print(f"[Visuals] ⏳ Free IP limit hit (1 image/45s). Auto-waiting {wait_sec}s cooldown...")
+                    time.sleep(wait_sec)
+                    continue
+
                 resp.raise_for_status()
 
                 if _validate_image_content(resp.content):
@@ -393,16 +408,8 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_ap
                     break
                 else:
                     print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
-            except requests.exceptions.HTTPError as http_err:
-                if resp.status_code == 402:
-                    print(f"[Visuals] ⚠️  Pollinations returned 402 (Payment/Key Required).")
-                    hit_402 = True
-                    break
-                wait = 4 * attempt
-                print(f"[Visuals] ⚠️  Attempt {attempt} failed: {http_err}. Retrying in {wait}s...")
-                time.sleep(wait)
             except Exception as e:
-                wait = 4 * attempt
+                wait = 5 * attempt
                 print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
                 time.sleep(wait)
 
