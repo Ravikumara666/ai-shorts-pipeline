@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import base64
 import asyncio
 import hashlib
 import subprocess
@@ -59,6 +60,24 @@ GEMINI_MODELS = [
 ]
 GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))
 GEMINI_TIMEOUT_MS = 120_000
+
+# Google's current image-generation models (Nano Banana family), newest first.
+# Imagen (generate_images) was retired in 2026, and image generation moved to
+# these Gemini models via the Interactions API. They are listed as an ordered
+# fallback chain so a single deprecated/unavailable model ID never kills a run
+# (the deprecation-404 trap that previously broke this pipeline).
+GEMINI_IMAGE_MODELS = [
+    os.getenv("GEMINI_IMAGE_MODEL", "gemini-nano-banana-2.1"),
+    "gemini-nano-banana-2.1",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite-image",
+    "gemini-3-pro-image",
+    "gemini-2.5-flash-image",
+]
+GEMINI_IMAGE_MODELS = list(dict.fromkeys(GEMINI_IMAGE_MODELS))
+# "1K" | "2K" | "4K" — 1K is plenty for the 1080x1920 render target and the
+# cheapest per-image tier; bump to "2K"/"4K" only if you want sharper source art.
+GEMINI_IMAGE_SIZE = os.getenv("GEMINI_IMAGE_SIZE", "1K")
 
 
 def _new_gemini_client(api_key: str) -> genai.Client:
@@ -576,7 +595,8 @@ def _download_via_hf_flux(prompt: str, img_path: str, seed: int) -> bool:
 
         print("[Visuals] 🎨 Pollinations unavailable; trying Hugging Face FLUX.1-schnell...")
         token = os.getenv("HF_TOKEN", "").strip() or None
-        client = Client("black-forest-labs/FLUX.1-schnell", hf_token=token)
+        # gradio_client >=1.x renamed the auth kwarg from `hf_token` to `token`.
+        client = Client("black-forest-labs/FLUX.1-schnell", token=token)
         result = client.predict(
             prompt=prompt,
             seed=seed,
@@ -598,8 +618,157 @@ def _download_via_hf_flux(prompt: str, img_path: str, seed: int) -> bool:
     return False
 
 
+def _coerce_image_bytes(data: object) -> Optional[bytes]:
+    """Return raw image bytes whether the SDK handed us bytes or a base64 string."""
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    if isinstance(data, str):
+        try:
+            return base64.b64decode(data)
+        except Exception:
+            return None
+    return None
+
+
+def _extract_interaction_image(interaction: object) -> Optional[bytes]:
+    """Pull image bytes out of an Interactions API response (direct or interleaved)."""
+    out = getattr(interaction, "output_image", None)
+    if out is not None:
+        found = _coerce_image_bytes(getattr(out, "data", None))
+        if found:
+            return found
+    for step in getattr(interaction, "steps", None) or []:
+        for block in getattr(step, "content", None) or []:
+            if getattr(block, "type", None) == "image":
+                found = _coerce_image_bytes(getattr(block, "data", None))
+                if found:
+                    return found
+    return None
+
+
+def _extract_generate_content_image(resp: object) -> Optional[bytes]:
+    """Pull inline image bytes out of a generate_content IMAGE-modality response."""
+    for cand in getattr(resp, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            inline = getattr(part, "inline_data", None)
+            if inline is not None:
+                found = _coerce_image_bytes(getattr(inline, "data", None))
+                if found:
+                    return found
+    return None
+
+
+def _normalize_to_vertical(image_bytes: bytes, img_path: str) -> bool:
+    """Cover-crop/resize arbitrary image bytes to the exact 1080x1920 JPG the renderer expects."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as src:
+            img = src.convert("RGB")
+            img.load()
+    except Exception as e:
+        print(f"[Visuals] ⚠️  Could not decode generated image: {e}")
+        return False
+
+    target_w, target_h = 1080, 1920
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        return False
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w, new_h = max(1, round(src_w * scale)), max(1, round(src_h * scale))
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    img = img.crop((left, top, left + target_w, top + target_h))
+    img.save(img_path, format="JPEG", quality=90)
+
+    with open(img_path, "rb") as f:
+        if _validate_image_content(f.read()):
+            return True
+    Path(img_path).unlink(missing_ok=True)
+    return False
+
+
+def _download_via_gemini_image(prompt: str, img_path: str, seed: int) -> bool:
+    """Primary image source: Google Nano Banana image models via the same GEMINI_API_KEY.
+
+    Tries the new Interactions API first (Google's recommended image path), then
+    falls back to generate_content IMAGE modality, walking the model list so a
+    single deprecated/unavailable model ID never aborts the episode.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        print("[Visuals] ⚠️  GEMINI_API_KEY not set; skipping Gemini image generation.")
+        return False
+
+    skip_codes = ("NOT_FOUND", "404", "429", "RESOURCE_EXHAUSTED", "PERMISSION_DENIED")
+    interactions_supported = True
+
+    print("[Visuals] 🎨 Generating scene via Google Nano Banana image model...")
+    for model_name in GEMINI_IMAGE_MODELS:
+        client: genai.Client | None = None
+        try:
+            client = _new_gemini_client(api_key)
+            image_bytes: Optional[bytes] = None
+
+            # --- Primary: Interactions API ---
+            if interactions_supported and hasattr(client, "interactions"):
+                try:
+                    interaction = client.interactions.create(
+                        model=model_name,
+                        input=prompt,
+                        response_format={
+                            "type": "image",
+                            "mime_type": "image/jpeg",
+                            "aspect_ratio": "9:16",
+                            "image_size": GEMINI_IMAGE_SIZE,
+                        },
+                    )
+                    image_bytes = _extract_interaction_image(interaction)
+                except (APIError, ServerError, ClientError) as exc:
+                    print(f"[Visuals] [Gemini-img] {model_name} interactions error: {exc}")
+                    if any(code in str(exc) for code in skip_codes):
+                        continue  # model unavailable/quota -> next model
+                except Exception as exc:
+                    print(f"[Visuals] [Gemini-img] interactions API unavailable: {exc}")
+            else:
+                interactions_supported = False
+
+            # --- Fallback: generate_content IMAGE modality ---
+            if image_bytes is None:
+                try:
+                    resp = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["TEXT", "IMAGE"],
+                        ),
+                    )
+                    image_bytes = _extract_generate_content_image(resp)
+                except (APIError, ServerError, ClientError) as exc:
+                    print(f"[Visuals] [Gemini-img] {model_name} generate_content error: {exc}")
+                    if any(code in str(exc) for code in skip_codes):
+                        continue
+                except Exception as exc:
+                    print(f"[Visuals] [Gemini-img] {model_name} generate_content failed: {exc}")
+
+            if image_bytes and _normalize_to_vertical(image_bytes, img_path):
+                print(f"[Visuals] ✅ Scene saved via Gemini image model '{model_name}'.")
+                return True
+        except Exception as exc:
+            print(f"[Visuals] [Gemini-img] {model_name} unexpected error: {exc}")
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    print("[Visuals] ⚠️  All Gemini image models failed for this scene.")
+    return False
+
+
 def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[str]:
-    """Generate prompt-hashed episode images via Pollinations, then free HF FLUX fallback."""
+    """Generate prompt-hashed episode images via Gemini (Nano Banana), then free fallbacks."""
     os.makedirs(output_dir, exist_ok=True)
     image_paths: list[str] = []
     pollinations_key = os.getenv("POLLINATIONS_API_KEY", "").strip()
@@ -636,36 +805,44 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
             f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo{key_query}",
         ]
 
-        saved = False
+        print(f"[Visuals] Generating Scene {idx + 1}/{len(visual_prompts)}...")
 
-        for attempt in range(1, 4):
-            endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
-            try:
-                print(f"[Visuals] Downloading Scene {idx + 1}/{len(visual_prompts)} (attempt {attempt}/5)...")
-                resp = requests.get(endpoint_url, headers=headers, timeout=90)
+        # Primary: Google Nano Banana image models (same GEMINI_API_KEY).
+        saved = _download_via_gemini_image(clean_prompt, img_path, seed=100 + idx)
 
-                resp.raise_for_status()
+        # Secondary: Pollinations — only if an API key is configured.
+        # The free unauthenticated endpoint now returns 402 Payment Required,
+        # so skip it entirely without a key instead of burning retries on 402.
+        if not saved and pollinations_key:
+            for attempt in range(1, 4):
+                endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
+                try:
+                    print(f"[Visuals] Pollinations fallback Scene {idx + 1} (attempt {attempt}/3)...")
+                    resp = requests.get(endpoint_url, headers=headers, timeout=90)
+                    resp.raise_for_status()
+                    if _validate_image_content(resp.content):
+                        with open(img_path, "wb") as f:
+                            f.write(resp.content)
+                        print(f"[Visuals] ✅ Scene {idx + 1} saved ({len(resp.content) // 1024} KB via Pollinations)")
+                        saved = True
+                        break
+                    else:
+                        print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
+                except Exception as e:
+                    wait = 5 * attempt
+                    print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
+                    time.sleep(wait)
 
-                if _validate_image_content(resp.content):
-                    with open(img_path, "wb") as f:
-                        f.write(resp.content)
-                    print(f"[Visuals] ✅ Scene {idx + 1} saved ({len(resp.content) // 1024} KB real artwork)")
-                    saved = True
-                    break
-                else:
-                    print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
-            except Exception as e:
-                wait = 5 * attempt
-                print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
-                time.sleep(wait)
-
+        # Tertiary: free Hugging Face FLUX.1-schnell Space.
         if not saved:
             saved = _download_via_hf_flux(clean_prompt, img_path, seed=100 + idx)
 
         if not saved:
             sys.exit(
-                f"[FATAL] Failed to download real 3D Pixar image for Scene {idx + 1}. "
-                "Check Pollinations, Hugging Face Space availability, or HF_TOKEN. Never falling back to solid color."
+                f"[FATAL] Failed to generate image for Scene {idx + 1} across all providers. "
+                "Primary is Google Nano Banana (needs a valid GEMINI_API_KEY with image generation enabled); "
+                "optional fallbacks are POLLINATIONS_API_KEY and the HF FLUX Space (HF_TOKEN). "
+                "Never falling back to solid color."
             )
 
         image_paths.append(img_path)
