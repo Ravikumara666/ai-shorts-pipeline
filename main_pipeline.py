@@ -1167,12 +1167,20 @@ async def build_language_video(
     final_duration = float(subprocess.check_output(dur_cmd).decode().strip())
     print(f"[{lang_key.upper()}] ⏱️  Final Short Duration: {final_duration:.2f} seconds")
 
+    # Production Shorts (8 scenes) must land in 60-75s. A reduced scene count
+    # (cheap smoke test) or an explicit override downgrades this to a warning so
+    # the render still completes for inspection.
+    relaxed = (
+        NUM_SCENES < 8
+        or os.getenv("RELAX_DURATION_CHECK", "").strip().lower() in ("1", "true", "yes")
+    )
     if not 60.0 <= final_duration <= 75.0:
-        raise ValueError(
-            f"{lang_key} render is {final_duration:.2f}s; expected 60.0-75.0s. "
-            "Refusing to upload an out-of-range Short."
-        )
-    print(f"[{lang_key.upper()}] 🎯 ✅ DURATION VERIFIED: {final_duration:.2f}s")
+        msg = f"{lang_key} render is {final_duration:.2f}s; expected 60.0-75.0s."
+        if not relaxed:
+            raise ValueError(msg + " Refusing to upload an out-of-range Short.")
+        print(f"[{lang_key.upper()}] ⚠️  {msg} Allowing anyway (relaxed: test / non-standard scene count).")
+    else:
+        print(f"[{lang_key.upper()}] 🎯 ✅ DURATION VERIFIED: {final_duration:.2f}s")
 
     print(f"[{lang_key.upper()}] ✅ Final Short -> {final_mp4}")
     return final_mp4
