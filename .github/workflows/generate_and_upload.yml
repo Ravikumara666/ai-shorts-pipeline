@@ -4,6 +4,8 @@ on:
   schedule:
     # 03:30 UTC = 09:00 IST, 12:30 UTC = 18:00 IST
     - cron: '30 3,12 * * *'
+    # TEMP schedule-trigger test — remove after it fires: 13:03 UTC = 18:33 IST
+    - cron: '3 13 * * *'
   workflow_dispatch:
     inputs:
       num_scenes:
