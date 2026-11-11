@@ -8,10 +8,13 @@ import subprocess
 import shutil
 import time
 import urllib.parse
+import io
+import textwrap
 from pathlib import Path
 from typing import Optional
 
 import requests
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from google import genai
 import edge_tts
@@ -20,6 +23,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+NUM_SCENES = 8
+
+
+# =====================================================================
+# 0. TOOL PATHS — prefer Homebrew on macOS, fallback to PATH
+# =====================================================================
+def _find_tool(name: str) -> str:
+    """Locate ffmpeg / ffprobe, preferring Homebrew install."""
+    for candidate in [f"/opt/homebrew/bin/{name}", shutil.which(name) or ""]:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    result = shutil.which(name)
+    if result:
+        return result
+    sys.exit(f"[FATAL] {name} not found. Install via: brew install ffmpeg")
+
+
+FFMPEG = _find_tool("ffmpeg")
+FFPROBE = _find_tool("ffprobe")
 
 
 def call_gemini_with_fallback(client: genai.Client, contents: str, config: dict):
@@ -45,26 +67,9 @@ def call_gemini_with_fallback(client: genai.Client, contents: str, config: dict)
             raise
     raise last_err or RuntimeError("Gemini model generation failed.")
 
-# =====================================================================
-# 0. TOOL PATHS — prefer Homebrew on macOS, fallback to PATH
-# =====================================================================
-def _find_tool(name: str) -> str:
-    """Locate ffmpeg / ffprobe, preferring Homebrew install."""
-    for candidate in [f"/opt/homebrew/bin/{name}", shutil.which(name) or ""]:
-        if candidate and os.path.isfile(candidate):
-            return candidate
-    result = shutil.which(name)
-    if result:
-        return result
-    sys.exit(f"[FATAL] {name} not found. Install via: brew install ffmpeg")
-
-
-FFMPEG  = _find_tool("ffmpeg")
-FFPROBE = _find_tool("ffprobe")
-
 
 # =====================================================================
-# 1. STRUCTURED OUTPUT SCHEMA
+# 1. STRUCTURED OUTPUT SCHEMA (8 SCENES FOR 65-75s RUNTIME)
 # =====================================================================
 class LocalizedMetadata(BaseModel):
     title: str = Field(description="YouTube title with Part X and #Shorts, max 100 chars")
@@ -72,9 +77,9 @@ class LocalizedMetadata(BaseModel):
     tags: list[str] = Field(description="Exactly 10 high-search regional SEO tags")
     narration_scenes: list[str] = Field(
         description=(
-            "Exactly 5 voiceover narrations in native script. Each scene MUST contain "
-            "3 to 4 detailed dramatic sentences (approx. 40 to 50 words per scene) "
-            "so that each spoken scene is 10 to 12 seconds long, guaranteeing a 50-60 second total Short length."
+            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each scene MUST contain "
+            "2 to 3 full, rich, expressive storytelling sentences (at least 22-28 words per scene) "
+            "so each scene voiceover lasts 7 to 9 seconds, ensuring a total video runtime between 60 and 75 seconds."
         )
     )
 
@@ -84,83 +89,40 @@ class MultiLangEpisode(BaseModel):
         description="2-3 sentence summary of this episode for continuity in the next part"
     )
     visual_prompts_english: list[str] = Field(
-        description="Exactly 5 detailed English image prompts. Each MUST begin with the character_visual_anchor text for visual consistency."
+        description=(
+            f"Exactly {NUM_SCENES} concise English visual prompts (UNDER 220 CHARACTERS EACH). "
+            "Format: '3D Pixar Disney animation style, {short_character_desc}, {scene_action_setting}, vibrant cinematic lighting, 9:16 vertical'"
+        )
     )
     kannada: LocalizedMetadata
     telugu: LocalizedMetadata
     hindi: LocalizedMetadata
 
 
-# Voice & Subtitle Font Mapping for Microsoft Edge-TTS
 LANGUAGE_CONFIG: dict[str, dict[str, str]] = {
     "kannada": {
         "voice": os.getenv("KN_VOICE", "kn-IN-GaganNeural"),
         "lang_code": "kn",
-        "font_name": "Noto Sans Kannada",
     },
     "telugu": {
         "voice": os.getenv("TE_VOICE", "te-IN-MohanNeural"),
         "lang_code": "te",
-        "font_name": "Noto Sans Telugu",
     },
     "hindi": {
         "voice": os.getenv("HI_VOICE", "hi-IN-MadhurNeural"),
         "lang_code": "hi",
-        "font_name": "Noto Sans Devanagari",
     },
 }
 
 
-def check_subtitles_filter_support() -> bool:
-    """Check if the current ffmpeg binary has the subtitles/libass filter enabled."""
-    try:
-        out = subprocess.check_output(
-            [FFMPEG, "-filters"], stderr=subprocess.STDOUT
-        ).decode(errors="ignore")
-        return "subtitles" in out
-    except Exception:
-        return False
-
-
-HAS_SUBTITLES_FILTER = check_subtitles_filter_support()
-
-
-def ensure_bgm_track() -> str:
-    """Ensure assets/bgm.mp3 exists; if missing, generate a gentle ambient drone loop via FFmpeg."""
-    bgm_dir = Path("assets")
-    bgm_dir.mkdir(parents=True, exist_ok=True)
-    bgm_file = bgm_dir / "bgm.mp3"
-
-    if bgm_file.exists() and bgm_file.stat().st_size > 10_000:
-        return str(bgm_file.resolve())
-
-    print("[BGM] Generating default ambient mystery loop via FFmpeg...")
-    cmd = [
-        FFMPEG, "-y",
-        "-f", "lavfi",
-        "-i", (
-            "aevalsrc=sin(2*PI*146.83*t)*0.04*sin(2*PI*0.1*t)"
-            "+sin(2*PI*220*t)*0.03*cos(2*PI*0.15*t)"
-            "+sin(2*PI*293.66*t)*0.025*sin(2*PI*0.2*t)"
-            "+sin(2*PI*440*t)*0.015*cos(2*PI*0.08*t):d=60:s=44100"
-        ),
-        "-c:a", "libmp3lame", "-b:a", "128k",
-        str(bgm_file),
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-    print(f"[BGM] ✅ Default BGM track ready: {bgm_file}")
-    return str(bgm_file.resolve())
-
-
 # =====================================================================
-# 2. STORY VAULT MANAGEMENT
+# 2. STORY VAULT & STATE MANAGEMENT
 # =====================================================================
 STORY_BANK_PATH = Path("story_bank.json")
 STORY_STATE_PATH = Path("story_state.json")
 
 
 def load_story_bank() -> list[dict]:
-    """Load the story vault."""
     if not STORY_BANK_PATH.exists():
         sys.exit("[FATAL] story_bank.json not found.")
     with open(STORY_BANK_PATH, "r", encoding="utf-8") as f:
@@ -168,7 +130,6 @@ def load_story_bank() -> list[dict]:
 
 
 def load_story_state() -> dict:
-    """Load current pipeline state."""
     if not STORY_STATE_PATH.exists():
         sys.exit("[FATAL] story_state.json not found.")
     with open(STORY_STATE_PATH, "r", encoding="utf-8") as f:
@@ -176,14 +137,12 @@ def load_story_state() -> dict:
 
 
 def save_story_state(state: dict) -> None:
-    """Persist pipeline state for the next cron run."""
     with open(STORY_STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
     print("[State] ✅ story_state.json saved.")
 
 
 def get_current_story(state: dict, bank: list[dict]) -> dict:
-    """Find the current story from the bank by ID."""
     story_id = state.get("current_story_id")
     for story in bank:
         if story["id"] == story_id:
@@ -192,12 +151,10 @@ def get_current_story(state: dict, bank: list[dict]) -> dict:
 
 
 def advance_to_next_story(state: dict, bank: list[dict]) -> None:
-    """Move to the next unfinished story in the vault after completing an arc."""
     completed = set(state.get("completed_story_ids", []))
     completed.add(state["current_story_id"])
     state["completed_story_ids"] = list(completed)
 
-    # Find next uncompleted story
     for story in bank:
         if story["id"] not in completed:
             state["current_story_id"] = story["id"]
@@ -206,11 +163,9 @@ def advance_to_next_story(state: dict, bank: list[dict]) -> None:
             print(f"[Vault] ➡️  Next story: '{story['series_title']}' ({story['id']})")
             return
 
-    # All stories completed — trigger vault refill
-    print("[Vault] ⚠️  All stories in the vault are completed! Triggering auto-refill...")
+    print("[Vault] ⚠️  All stories in vault completed! Triggering auto-refill...")
     refill_story_vault(bank, count=4)
 
-    # Reload and pick the first new story
     refreshed_bank = load_story_bank()
     for story in refreshed_bank:
         if story["id"] not in completed:
@@ -227,55 +182,35 @@ def advance_to_next_story(state: dict, bank: list[dict]) -> None:
 # 3. AUTO-REFILL STORY VAULT WITH GEMINI
 # =====================================================================
 class NewStoryEntry(BaseModel):
-    id: str = Field(description="Unique story ID like story_007, story_008, etc.")
-    category: str = Field(description="Category like 'Panchatantra Fable', 'South Indian Folklore', 'Tenali Rama Wit', 'Mythological Adventure', 'Village Wisdom', 'Vijayanagara Mystery'")
+    id: str = Field(description="Unique story ID like story_007")
+    category: str = Field(description="Category like Panchatantra Fable, South Indian Folklore, Tenali Rama Wit")
     series_title: str = Field(description="Catchy series title for YouTube")
-    character_visual_anchor: str = Field(
-        description="Detailed 3D Pixar-style character description with specific clothing colors, facial features, accessories. Must be reusable across all 5 episodes for visual consistency."
-    )
+    character_visual_anchor: str = Field(description="Detailed 3D Pixar-style character description")
     core_plot: str = Field(description="One-paragraph plot summary with moral theme")
-    episode_beats: list[str] = Field(
-        description="Exactly 5 episode beat descriptions, each labeled Part 1 through Part 5"
-    )
+    episode_beats: list[str] = Field(description="5 episode beat descriptions")
 
 
 class StoryVaultRefill(BaseModel):
-    new_stories: list[NewStoryEntry] = Field(
-        description="List of new story entries to add to the vault"
-    )
+    new_stories: list[NewStoryEntry] = Field(description="List of new story entries")
 
 
 def refill_story_vault(existing_bank: list[dict], count: int = 4) -> None:
-    """Use Gemini to generate new stories and append them to the vault."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("[FATAL] GEMINI_API_KEY not set.")
 
     client = genai.Client(api_key=api_key)
-
     existing_titles = [s["series_title"] for s in existing_bank]
     existing_ids = [s["id"] for s in existing_bank]
     max_id_num = max(int(sid.split("_")[1]) for sid in existing_ids) if existing_ids else 0
 
     prompt = f"""You are a master Indian storyteller and children's content creator.
-
-EXISTING STORIES (DO NOT REPEAT THESE):
+EXISTING STORIES (DO NOT REPEAT):
 {json.dumps(existing_titles, indent=2)}
 
-Generate exactly {count} BRAND NEW story entries for a YouTube Shorts vault. Requirements:
-
-1. Each story must be from authentic Indian folklore, mythology, Panchatantra, Tenali Rama tales, regional legends, or village wisdom traditions.
-2. Categories to choose from: 'Panchatantra Fable', 'South Indian Folklore', 'Tenali Rama Wit', 'Mythological Adventure', 'Village Wisdom', 'Vijayanagara Mystery', 'Rajasthani Legend', 'Bengali Folk Tale', 'Kerala Wisdom'
-3. `character_visual_anchor`: Write a VERY detailed 3D Pixar-style character description including:
-   - Exact age, skin tone, facial features
-   - Specific clothing with EXACT colors (saffron, emerald, crimson, etc.)
-   - Unique accessories or companions (parrot, staff, jewel, etc.)
-   - Background setting hint
-   - Must end with: '3D Pixar Disney animation style, vibrant lighting'
-4. Each story needs exactly 5 episode beats (Part 1 through Part 5) that form a complete serialized arc with hooks and cliffhangers.
-5. Part 5 must always end with a clear moral lesson.
-6. Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num + 2).zfill(3)}, etc.
-7. Make stories DIVERSE — different regions, time periods, character types (animals, children, kings, villagers, mythological figures)."""
+Generate exactly {count} BRAND NEW authentic Indian folklore story arcs (Panchatantra, Tenali Rama, Vikram Betal, regional legends).
+Each story needs a character_visual_anchor and exactly 5 episode beats (Part 1 through 5).
+Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num + 2).zfill(3)}, etc."""
 
     print(f"[Vault Refill] Generating {count} new stories with Gemini...")
     response = call_gemini_with_fallback(
@@ -287,22 +222,16 @@ Generate exactly {count} BRAND NEW story entries for a YouTube Shorts vault. Req
             "temperature": 0.9,
         },
     )
-
     refill = StoryVaultRefill.model_validate_json(response.text)
     new_entries = [entry.model_dump() for entry in refill.new_stories]
-
-    # Append to existing bank
     updated_bank = existing_bank + new_entries
     with open(STORY_BANK_PATH, "w", encoding="utf-8") as f:
         json.dump(updated_bank, f, indent=4, ensure_ascii=False)
-
     print(f"[Vault Refill] ✅ Added {len(new_entries)} new stories to vault.")
-    for entry in new_entries:
-        print(f"    📖 {entry['series_title']} ({entry['category']})")
 
 
 # =====================================================================
-# 4. GENERATE MULTI-LANGUAGE EPISODE WITH GEMINI 2.5 FLASH
+# 4. GENERATE 65-75s MULTI-LANGUAGE EPISODE WITH GEMINI
 # =====================================================================
 def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -320,52 +249,39 @@ def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
     character_anchor = story["character_visual_anchor"]
 
     finale_instruction = (
-        "End Scene 5 by resolving the story with the moral lesson. "
-        "Give a warm, satisfying conclusion."
+        "End Scene 8 by resolving the story with a heartwarming moral lesson."
         if is_finale
-        else (
-            f"End Scene 5 with an exciting cliffhanger asking viewers to "
-            f"subscribe for Part {ep_num + 1}!"
-        )
+        else f"End Scene 8 with an intense cliffhanger asking viewers to subscribe for Part {ep_num + 1}!"
     )
 
-    prompt = f"""You are a master Indian storyteller creating a high-retention 3D Pixar-style animated YouTube Shorts series for kids and families.
+    prompt = f"""You are a master Indian storyteller creating an animated YouTube Shorts episode.
 
 STORY DETAILS:
 - Series: {story['series_title']}
 - Category: {story['category']}
 - Core Plot: {story['core_plot']}
 - Current Episode: Part {ep_num} of {max_ep}
-- Episode Beat to Follow: {current_beat}
-- What happened previously: {state['previous_summary']}
+- Beat to Follow: {current_beat}
+- Previous Events: {state['previous_summary']}
 
-CHARACTER VISUAL ANCHOR (use this EXACT description at the START of every visual prompt):
+CHARACTER ANCHOR:
 {character_anchor}
 
-CRITICAL DURATION & LENGTH REQUIREMENT (TARGET: 50 TO 60 SECONDS TOTAL):
-- YouTube Shorts retention requires the total video to be between 50 and 60 seconds (approx 1 minute).
-- You MUST write exactly 5 scenes.
-- In EACH scene, write 3 to 4 full, rich, dramatic spoken sentences in the native script (approx. 40-50 words per scene).
-- Each scene voiceover MUST take 10 to 12 seconds when spoken aloud by TTS (5 scenes × 11 seconds = ~55 seconds total video duration).
-- DO NOT write brief 1-sentence summaries. Write vivid character dialogue, sensory atmosphere, sound descriptions, and dramatic suspense.
-
-INSTRUCTIONS:
-1. `visual_prompts_english`: Write 5 DETAILED English visual prompts.
-   - Each prompt MUST START with the character visual anchor text above for visual consistency across episodes.
-   - Then add the scene-specific action, setting, lighting, and emotion.
-   - End each with: '9:16 vertical portrait layout, cinematic 3D Pixar Disney animation style, rich vibrant textures, dramatic lighting'
-2. Write the matching 5-scene voiceover narration (3-4 full sentences each) in natural, engaging spoken:
+CRITICAL DURATION & LENGTH REQUIREMENTS (TARGET: 65 TO 75 SECONDS TOTAL):
+1. You MUST generate exactly {NUM_SCENES} progressive scenes (Scene 1 to Scene {NUM_SCENES}).
+2. In EACH of the {NUM_SCENES} scenes, write 2 to 3 full, rich, dramatic spoken sentences (at least 22-28 words per scene) in:
    - KANNADA (Kannada script ಕನ್ನಡ)
    - TELUGU (Telugu script తెలుగు)
    - HINDI (Devanagari script हिन्दी)
-3. Start Scene 1 with a powerful gripping hook. {finale_instruction}
-4. Provide localized YouTube titles (include 'Part {ep_num}' and '#Shorts'), descriptions with 3-4 relevant hashtags, and exactly 10 high-search regional tags for each language.
-5. `episode_summary_for_next_part`: Write a 2-3 sentence summary of this episode's events for continuity."""
+   Each scene narration must take 7 to 9 seconds when spoken aloud ({NUM_SCENES} scenes × 8.5s = ~68 seconds total runtime).
+3. Do NOT write brief 1-sentence summaries. Write vivid atmospheric descriptions, suspenseful narration, and character dialogue.
+4. `visual_prompts_english`: Write exactly {NUM_SCENES} concise English visual prompts (UNDER 220 CHARACTERS EACH).
+   Format: "3D Pixar Disney animation style, {character_anchor[:60]}, {{scene action/setting}}, vibrant cinematic lighting, 9:16 vertical"
+5. Start Scene 1 with a powerful hook. {finale_instruction}
+6. Provide localized YouTube titles (with Part {ep_num} and #Shorts), descriptions, and exactly 10 high-search regional tags.
+7. `episode_summary_for_next_part`: Write a 2-3 sentence summary for continuity."""
 
-    print(
-        f"[Gemini] Generating '{story['series_title']}' Part {ep_num} "
-        f"({story['category']})..."
-    )
+    print(f"[Gemini] Generating '{story['series_title']}' Part {ep_num} ({NUM_SCENES} scenes for ~70s runtime)...")
     response = call_gemini_with_fallback(
         client,
         contents=prompt,
@@ -381,87 +297,79 @@ INSTRUCTIONS:
 
 
 # =====================================================================
-# 5. DOWNLOAD 5 AI IMAGES ONCE (POLLINATIONS FREE FLUX API)
+# 5. DOWNLOAD REAL 3D PIXAR IMAGES (NO SOLID COLOR FALLBACK!)
 # =====================================================================
-def _generate_fallback_image(out_path: str, idx: int) -> None:
-    """Generate a clean colored vertical backdrop as resilient fallback."""
-    colors = ["0x1E3A8A", "0x14532D", "0x78350F", "0x581C87", "0x831843"]
-    color = colors[idx % len(colors)]
-    cmd = [
-        FFMPEG, "-y",
-        "-f", "lavfi",
-        "-i", f"color=c={color}:s=1080x1920:d=1",
-        "-frames:v", "1",
-        out_path,
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+def _validate_image_content(content: bytes) -> bool:
+    """Validate that downloaded bytes form a real, non-solid-color image."""
+    if len(content) < 30_000:
+        return False
+    try:
+        img = Image.open(io.BytesIO(content))
+        extrema = img.convert("L").getextrema()
+        # Ensure variance between min and max pixel brightness (not a flat solid color)
+        return (extrema[1] - extrema[0]) >= 25
+    except Exception:
+        return False
 
 
-def generate_shared_images(
-    visual_prompts: list[str], output_dir: str, mock_images: bool = False
-) -> list[str]:
+def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[str]:
+    """Download real 3D Pixar vertical images from Pollinations Flux API with strict validation."""
     os.makedirs(output_dir, exist_ok=True)
     image_paths: list[str] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
     for idx, prompt in enumerate(visual_prompts):
         img_path = os.path.join(output_dir, f"scene_{idx}.jpg")
 
-        # Skip if already downloaded (re-run resilience — must be a real image > 30KB)
-        if os.path.isfile(img_path) and os.path.getsize(img_path) > 30_000:
-            print(f"[Visuals] Scene {idx + 1}/5 already exists ({os.path.getsize(img_path) // 1024} KB), skipping.")
-            image_paths.append(img_path)
-            continue
+        # Skip if already downloaded and verified
+        if os.path.isfile(img_path):
+            with open(img_path, "rb") as f:
+                if _validate_image_content(f.read()):
+                    print(f"[Visuals] Scene {idx + 1}/{len(visual_prompts)} verified cached image exists, skipping.")
+                    image_paths.append(img_path)
+                    continue
 
-        if mock_images:
-            print(f"[Visuals] Generating mock canvas for Scene {idx + 1}/5...")
-            _generate_fallback_image(img_path, idx)
-            image_paths.append(img_path)
-            continue
+        # Keep prompt concise to prevent HTTP 414 / Cloudflare rejection
+        clean_prompt = prompt.replace("\n", " ").strip()
+        if len(clean_prompt) > 240:
+            clean_prompt = clean_prompt[:235] + ", 9:16 vertical"
+        encoded = urllib.parse.quote(clean_prompt)
 
-        encoded = urllib.parse.quote(prompt)
-        url = (
-            f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?width=1080&height=1920&seed={100 + idx}&nologo=true&model=flux"
-        )
+        # Endpoints to try (Flux -> Turbo -> Standard)
+        endpoints = [
+            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=flux",
+            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo",
+            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true",
+        ]
 
         saved = False
-        # Retry with exponential backoff: 5s, 10s, 20s
         for attempt in range(1, 4):
+            endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
             try:
-                print(
-                    f"[Visuals] Downloading Scene {idx + 1}/5 "
-                    f"(attempt {attempt}/3)..."
-                )
-                resp = requests.get(url, timeout=120)
+                print(f"[Visuals] Downloading Scene {idx + 1}/{len(visual_prompts)} (attempt {attempt}/3)...")
+                resp = requests.get(endpoint_url, headers=headers, timeout=90)
                 resp.raise_for_status()
 
-                # Validate we got an actual image
-                content_type = resp.headers.get("content-type", "")
-                if "image" not in content_type and len(resp.content) < 10_000:
-                    raise ValueError(
-                        f"Response is not an image (content-type: {content_type}, "
-                        f"size: {len(resp.content)} bytes)"
-                    )
-
-                with open(img_path, "wb") as f:
-                    f.write(resp.content)
-                print(
-                    f"[Visuals] ✅ Scene {idx + 1} saved "
-                    f"({len(resp.content) // 1024} KB)"
-                )
-                saved = True
-                break
-            except (requests.RequestException, IOError, ValueError) as e:
-                wait = 5 * (2 ** (attempt - 1))  # 5, 10, 20
-                print(
-                    f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. "
-                    f"Retrying in {wait}s..."
-                )
+                if _validate_image_content(resp.content):
+                    with open(img_path, "wb") as f:
+                        f.write(resp.content)
+                    print(f"[Visuals] ✅ Scene {idx + 1} saved ({len(resp.content) // 1024} KB real artwork)")
+                    saved = True
+                    break
+                else:
+                    print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
+            except Exception as e:
+                wait = 4 * attempt
+                print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
                 time.sleep(wait)
 
         if not saved:
-            print(f"[Visuals] ⚠️  Pollinations unavailable for Scene {idx + 1}; using colored backdrop fallback.")
-            _generate_fallback_image(img_path, idx)
+            sys.exit(
+                f"[FATAL] Failed to download real 3D Pixar image for Scene {idx + 1}. "
+                "Check network connection or Pollinations status. Never falling back to solid color."
+            )
 
         image_paths.append(img_path)
 
@@ -469,50 +377,89 @@ def generate_shared_images(
 
 
 # =====================================================================
-# 6. GENERATE REGIONAL VOICEOVER & SUBTITLES
+# 6. PILLOW-BASED 100% VISIBLE SUBTITLE OVERLAY GENERATOR
 # =====================================================================
-def _ticks_to_srt_time(ticks: int) -> str:
-    """Convert 100-nanosecond ticks to standard SRT HH:MM:SS,mmm timestamp."""
-    total_seconds = max(0.0, ticks / 10_000_000)
-    hours = int(total_seconds // 3600)
-    minutes = int((total_seconds % 3600) // 60)
-    secs = int(total_seconds % 60)
-    millis = int((total_seconds - int(total_seconds)) * 1000)
-    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+def _get_indic_font(lang: str, size: int = 46) -> ImageFont.FreeTypeFont:
+    """Locate appropriate Indic font on macOS or Linux."""
+    paths = {
+        "kannada": [
+            "/System/Library/Fonts/NotoSansKannada.ttc",
+            "/System/Library/Fonts/Supplemental/Kannada Sangam MN.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansKannada-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf",
+        ],
+        "telugu": [
+            "/System/Library/Fonts/KohinoorTelugu.ttc",
+            "/System/Library/Fonts/Supplemental/Telugu MN.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansTelugu-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf",
+        ],
+        "hindi": [
+            "/System/Library/Fonts/Kohinoor.ttc",
+            "/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        ],
+    }
+    for p in paths.get(lang, []):
+        if os.path.isfile(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
 
 
-def _build_srt_content(boundaries: list[dict], fallback_text: str, duration: float) -> str:
-    """Build SRT formatted subtitles from edge-tts boundary events."""
-    if boundaries:
-        entries = []
-        for idx, b in enumerate(boundaries, start=1):
-            start = _ticks_to_srt_time(b["offset"])
-            end = _ticks_to_srt_time(b["offset"] + b["duration"])
-            t = b.get("text", "").strip()
-            if t:
-                entries.append(f"{idx}\n{start} --> {end}\n{t}\n")
-        if entries:
-            return "\n".join(entries)
+def create_subtitle_overlay_png(text: str, lang: str, out_png: str) -> str:
+    """Generate a transparent 1080x1920 PNG with bold yellow text, black outline, and dark pill."""
+    overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = _get_indic_font(lang, size=46)
 
-    # Fallback to single subtitle spanning the scene
-    start_str = "00:00:00,000"
-    end_str = _ticks_to_srt_time(int(duration * 10_000_000))
-    return f"1\n{start_str} --> {end_str}\n{fallback_text.strip()}\n"
+    # Wrap to ~28-30 characters per line
+    lines = textwrap.wrap(text, width=30)
+    if len(lines) > 3:
+        lines = lines[:3]  # Keep to 3 lines max for visual clarity
+    wrapped = "\n".join(lines)
+
+    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=14, align="center")
+    w = bbox[2] - bbox[0]
+    h = bbox[3] - bbox[1]
+    x = (1080 - w) // 2
+    # Position in lower-middle safe zone (above YouTube Shorts description/buttons)
+    y = 1920 - 360 - h
+
+    # Semi-transparent dark pill background
+    pad_x, pad_y = 32, 20
+    draw.rounded_rectangle(
+        [x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y],
+        radius=18,
+        fill=(0, 0, 0, 175),
+    )
+
+    # Bold yellow text (#FFE600) with thick black outline
+    draw.multiline_text(
+        (x, y),
+        wrapped,
+        font=font,
+        fill="#FFE600",
+        stroke_width=4,
+        stroke_fill="black",
+        spacing=14,
+        align="center",
+    )
+
+    overlay.save(out_png, "PNG")
+    return out_png
 
 
-async def synthesize_scene_audio(
-    text: str, voice: str, out_mp3: str, out_srt: str
-) -> float:
-    """Synthesize TTS audio, capture boundary timestamps for .srt, return speech duration."""
-    communicate = edge_tts.Communicate(text, voice, rate="+5%")
-    boundaries: list[dict] = []
-
-    with open(out_mp3, "wb") as f:
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                f.write(chunk["data"])
-            elif chunk["type"] in ("SentenceBoundary", "WordBoundary"):
-                boundaries.append(chunk)
+# =====================================================================
+# 7. REGIONAL AUDIO SYNTHESIS & BACKGROUND MUSIC
+# =====================================================================
+async def synthesize_scene_audio(text: str, voice: str, out_mp3: str) -> float:
+    """Synthesize narration with edge-tts at natural dramatic pace (-5%)."""
+    communicate = edge_tts.Communicate(text, voice, rate="-5%")
+    await communicate.save(out_mp3)
 
     cmd = [
         FFPROBE,
@@ -522,18 +469,39 @@ async def synthesize_scene_audio(
         out_mp3,
     ]
     duration = float(subprocess.check_output(cmd).decode().strip())
-
-    # Save SRT file
-    srt_content = _build_srt_content(boundaries, text, duration)
-    with open(out_srt, "w", encoding="utf-8") as sf:
-        sf.write(srt_content)
-
-    print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s (+SRT captions)")
+    print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s (dramatic pace)")
     return duration
 
 
+def ensure_bgm_track() -> str:
+    """Ensure assets/bgm.mp3 exists; fallback generates soft ambient loop."""
+    bgm_dir = Path("assets")
+    bgm_dir.mkdir(parents=True, exist_ok=True)
+    bgm_file = bgm_dir / "bgm.mp3"
+
+    if bgm_file.exists() and bgm_file.stat().st_size > 10_000:
+        return str(bgm_file.resolve())
+
+    print("[BGM] Generating default ambient mystery loop via FFmpeg...")
+    cmd = [
+        FFMPEG, "-y",
+        "-f", "lavfi",
+        "-i", (
+            "aevalsrc=sin(2*PI*146.83*t)*0.04*sin(2*PI*0.1*t)"
+            "+sin(2*PI*220*t)*0.03*cos(2*PI*0.15*t)"
+            "+sin(2*PI*293.66*t)*0.025*sin(2*PI*0.2*t)"
+            "+sin(2*PI*440*t)*0.015*cos(2*PI*0.08*t):d=90:s=44100"
+        ),
+        "-c:a", "libmp3lame", "-b:a", "128k",
+        str(bgm_file),
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    print(f"[BGM] ✅ Default BGM track ready: {bgm_file}")
+    return str(bgm_file.resolve())
+
+
 # =====================================================================
-# 7. RENDER LANGUAGE-SPECIFIC SHORT (KEN BURNS + CAPTIONS + BGM MIX)
+# 8. RENDER DYNAMIC ANIMATED VIDEO WITH OVERLAY SUBTITLES
 # =====================================================================
 async def build_language_video(
     lang_key: str,
@@ -542,85 +510,78 @@ async def build_language_video(
     work_dir: str,
     bgm_path: Optional[str] = None,
 ) -> str:
-    """Build a single language Short from shared images, subtitles, BGM, and TTS narration."""
+    """Render a 60-75s Short with dynamic camera animations, burned-in subtitles, and BGM."""
     voice = LANGUAGE_CONFIG[lang_key]["voice"]
-    font_name = LANGUAGE_CONFIG[lang_key].get("font_name", "Noto Sans")
     lang_dir = os.path.join(work_dir, lang_key)
     os.makedirs(lang_dir, exist_ok=True)
 
-    print(f"\n[{lang_key.upper()}] Building Short with voice {voice} (Font: {font_name})...")
+    print(f"\n[{lang_key.upper()}] Building Short with voice {voice} ({len(meta.narration_scenes)} scenes)...")
 
     segment_files: list[str] = []
-    for i, (scene_text, img_path) in enumerate(
-        zip(meta.narration_scenes, image_paths)
-    ):
+    total_running_time = 0.0
+
+    for i, (scene_text, img_path) in enumerate(zip(meta.narration_scenes, image_paths)):
         audio_path = os.path.join(lang_dir, f"audio_{i}.mp3")
-        srt_path = os.path.join(lang_dir, f"audio_{i}.srt")
+        overlay_png = os.path.join(lang_dir, f"sub_{i}.png")
         seg_path = os.path.join(lang_dir, f"seg_{i}.mp4")
 
-        # 1. Synthesize audio + generate SRT captions
-        duration = await synthesize_scene_audio(scene_text, voice, audio_path, srt_path)
+        # 1. Synthesize audio
+        duration = await synthesize_scene_audio(scene_text, voice, audio_path)
 
-        # 2. Add 0.35s natural breath pause to segment duration
-        total_seg_duration = duration + 0.35
-        frames = int(total_seg_duration * 30) + 5
+        # 2. Add 0.4s natural breath pause between scenes
+        total_seg_duration = duration + 0.40
+        total_running_time += total_seg_duration
+        frames = int(total_seg_duration * 30) + 2
 
-        # 3. Dynamic multi-style Ken Burns camera animation per scene
-        if i % 4 == 0:
-            # Cinematic Slow Zoom-In to character focal point
-            cam_expr = f"zoompan=z='min(zoom+0.0016,1.35)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
-        elif i % 4 == 1:
-            # Cinematic Slow Zoom-Out revealing wider mythical world
-            cam_expr = f"zoompan=z='if(lte(zoom,1.0),1.3,max(1.001,zoom-0.0013))':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
-        elif i % 4 == 2:
-            # Slow vertical cinematic tilt / upward pan
-            cam_expr = f"zoompan=z='1.25':d={frames}:x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/{frames})':s=1080x1920:fps=30"
-        else:
-            # Slow horizontal cinematic pan across frame
-            cam_expr = f"zoompan=z='1.25':d={frames}:x='(iw-iw/zoom)*(on/{frames})':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
+        # 3. Create Pillow subtitle overlay PNG
+        create_subtitle_overlay_png(scene_text, lang_key, overlay_png)
 
-        vf_filters = [
-            "scale=1080:1920",
-            cam_expr,
-        ]
-
-        # 4. Burn-in subtitles if filter is supported (MarginV=280 safe zone, yellow font with black outline)
-        if HAS_SUBTITLES_FILTER:
-            srt_filename = f"audio_{i}.srt"
-            sub_style = (
-                f"Fontname={font_name},FontSize=20,Bold=1,PrimaryColour=&H0000FFFF,"
-                "OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,"
-                "Alignment=2,MarginV=280"
+        # 4. Alternating dynamic camera movement (smooth push-in vs pull-out)
+        if i % 2 == 0:
+            # Even scenes: Smooth push-in zoom + horizontal motion
+            cam_expr = (
+                f"zoompan=z='min(zoom+0.002,1.35)':"
+                f"x='iw/2-(iw/zoom/2)+sin(on/25)*40':"
+                f"y='ih/2-(ih/zoom/2)':"
+                f"d={frames}:s=1080x1920:fps=30"
             )
-            vf_filters.append(f"subtitles={srt_filename}:force_style='{sub_style}'")
+        else:
+            # Odd scenes: Smooth pull-out zoom + vertical motion
+            cam_expr = (
+                f"zoompan=z='if(eq(on,1),1.35,max(1.0,zoom-0.002))':"
+                f"x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)+cos(on/25)*40':"
+                f"d={frames}:s=1080x1920:fps=30"
+            )
 
-        vf_filters.append("format=yuv420p")
-        vf_chain = ",".join(vf_filters)
+        fade_out_st = max(0.1, total_seg_duration - 0.3)
+        vf_filter = (
+            f"[0:v]scale=1080:1920,{cam_expr}[bg];"
+            f"[bg][1:v]overlay=0:0,"
+            f"fade=t=in:st=0:d=0.3,fade=t=out:st={fade_out_st:.2f}:d=0.3,"
+            f"format=yuv420p[vout]"
+        )
 
-        # 5. Render segment with audio padding (-af apad=pad_dur=0.35) and standardized audio (-ar 44100 -ac 2)
         ffmpeg_cmd = [
             FFMPEG, "-y",
             "-loop", "1", "-i", os.path.abspath(img_path),
+            "-i", os.path.abspath(overlay_png),
             "-i", os.path.abspath(audio_path),
             "-t", f"{total_seg_duration:.3f}",
-            "-vf", vf_chain,
+            "-filter_complex", vf_filter,
+            "-map", "[vout]",
+            "-map", "2:a",
             "-c:v", "libx264", "-preset", "veryfast",
-            "-af", "apad=pad_dur=0.35",
+            "-af", "apad=pad_dur=0.40",
             "-c:a", "aac", "-b:a", "128k",
             "-ar", "44100", "-ac", "2",
             os.path.abspath(seg_path),
         ]
-        subprocess.run(
-            ffmpeg_cmd,
-            cwd=lang_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
+        subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         segment_files.append(seg_path)
-        print(f"    ✅ Segment {i + 1}/5 rendered ({total_seg_duration:.2f}s with +0.35s breath pause)")
+        print(f"    ✅ Scene {i + 1}/{len(meta.narration_scenes)} rendered ({total_seg_duration:.2f}s, sub overlay applied)")
 
-    # 6. Concatenate all 5 segments into raw stitched video
+    # 5. Concatenate all segments
     concat_list = os.path.join(lang_dir, "concat.txt")
     with open(concat_list, "w") as f:
         for seg in segment_files:
@@ -637,7 +598,7 @@ async def build_language_video(
         check=True,
     )
 
-    # 7. Mix BGM at 10% volume into final video
+    # 6. Mix BGM at 10% volume
     final_mp4 = os.path.join(work_dir, f"final_{lang_key}.mp4")
     if bgm_path and os.path.isfile(bgm_path):
         subprocess.run(
@@ -661,78 +622,39 @@ async def build_language_video(
             stderr=subprocess.DEVNULL,
             check=True,
         )
-        print(f"[{lang_key.upper()}] 🎵 Mixed BGM at 10% volume into Short.")
+        print(f"[{lang_key.upper()}] 🎵 Mixed BGM at 10% volume.")
     else:
         shutil.copyfile(concat_mp4, final_mp4)
+
+    # 7. Hard Verification of Video Duration (MUST BE >= 60.0s)
+    dur_cmd = [
+        FFPROBE, "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", final_mp4,
+    ]
+    final_duration = float(subprocess.check_output(dur_cmd).decode().strip())
+    print(f"[{lang_key.upper()}] ⏱️  Final Short Duration: {final_duration:.2f} seconds")
+
+    if final_duration < 60.0:
+        print(f"[{lang_key.upper()}] ⚠️  WARNING: Duration ({final_duration:.2f}s) is under 60 seconds target.")
+    else:
+        print(f"[{lang_key.upper()}] 🎯 ✅ DURATION VERIFIED: {final_duration:.2f}s (>= 60s target achieved!)")
 
     print(f"[{lang_key.upper()}] ✅ Final Short -> {final_mp4}")
     return final_mp4
 
 
 # =====================================================================
-# 8. MAIN ORCHESTRATOR
+# 9. MAIN ORCHESTRATOR
 # =====================================================================
-def get_mock_episode_data(story: dict, ep_num: int) -> MultiLangEpisode:
-    """Generate mock episode data for offline or testing runs without calling Gemini."""
-    anchor = story["character_visual_anchor"]
-    beat = story["episode_beats"][ep_num - 1] if ep_num <= len(story["episode_beats"]) else ""
-    return MultiLangEpisode(
-        episode_summary_for_next_part=f"Summary of {story['series_title']} Part {ep_num}: {beat}",
-        visual_prompts_english=[
-            f"{anchor}, scene {i+1}, standing near the historic ruins, 9:16 vertical portrait layout, cinematic lighting"
-            for i in range(5)
-        ],
-        kannada=LocalizedMetadata(
-            title=f"{story['series_title']} - Part {ep_num} | ಕನ್ನಡ ಕಥೆಗಳು #Shorts",
-            description=f"ಕನ್ನಡದಲ್ಲಿ ಸುಂದರ ಕಥೆ - {story['series_title']} ಭಾಗ {ep_num}. #Shorts #KannadaStories #Folklore",
-            tags=["ಕನ್ನಡ ಕಥೆಗಳು", "Kannada Stories", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Hampi", "Karnataka"],
-            narration_scenes=[
-                "ಒಂದು ಕಾಲದಲ್ಲಿ ವಿಜಯನಗರದ ವೈಭವದ ಹಂಪಿಯ ಪವಿತ್ರ ನೆಲದಲ್ಲಿ ಒಂದು ಅದ್ಭುತ ರಹಸ್ಯ ಅಡಗಿತ್ತು. ನಡುರಾತ್ರಿಯ ಕತ್ತಲೆಯಲ್ಲಿ ಹಳೆಯ ಕಲ್ಯಾಣಿಯ ಮೆಟ್ಟಿಲುಗಳು ನಿಗೂಢವಾಗಿ ಬೆಳಗುತ್ತಿದ್ದವು. ಪುರಾತನ ಕಥೆಗಳ ಪ್ರಕಾರ, ಈ ಬಾವಿಯಲ್ಲಿ ರಾಜಮನೆತನದ ಅಪಾರ ನಿಧಿಯಿತ್ತು.",
-                "ಬುದ್ಧಿವಂತ ಹನ್ನೆರಡು ವರ್ಷದ ಪುಟ್ಟ ತನ್ನ ಹೆಗಲ ಮೇಲಿನ ಪುಟ್ಟ ಹಸಿರು ಗಿಳಿಯೊಂದಿಗೆ ಕಲ್ಯಾಣಿಯ ಹತ್ತಿರ ಬಂದನು. ತಣ್ಣನೆಯ ಗಾಳಿ ಬೀಸುತ್ತಿತ್ತು, ದೂರದಲ್ಲಿ ಗಂಟೆಯ ನಾದ ಕೇಳಿಸುತ್ತಿತ್ತು. ಅವನ ಮುದ್ದಾದ ಗಿಳಿ ಮೀನಾ ಎಚ್ಚರಿಕೆಯಿಂದ ಸುತ್ತಲೂ ನೋಡುತ್ತಿತ್ತು.",
-                "ಹಠಾತ್ತಾಗಿ ನೀರಿನ ಒಳಗಿನಿಂದ ಒಂದು ನಿಗೂಢ ಗಂಭೀರ ಧ್ವನಿಯೊಂದು ಪುಟ್ಟನ ಹೆಸರನ್ನು ಕರೆಯಿತು. ನೀರಿನ ಮೇಲೆ ವಿಚಿತ್ರ ತರಂಗಗಳು ಮೂಡಿ, ನೀರಿನ ಆಳದಲ್ಲಿ ಹೊಳೆಯುವ ಬೆಳಕು ಕಾಣಿಸಿತು. ಪುಟ್ಟ ಭಯಪಡದೆ ಧೈರ್ಯದಿಂದ ಮೆಟ್ಟಿಲುಗಳನ್ನು ಇಳಿಯಲು ಪ್ರಾರಂಭಿಸಿದನು.",
-                "ಬಾವಿಯ ಕೊನೆಯ ಮೆಟ್ಟಿಲಿನ ಮೇಲೆ ಒಂದು ದೈವಿಕ ಚಿನ್ನದ ಕೀಲಿಯು ಪ್ರಕಾಶಮಾನವಾಗಿ ಹೊಳೆಯುತ್ತಿತ್ತು. ಆದರೆ ಆ ಕೀಲಿಯನ್ನು ರಕ್ಷಿಸಲು ನೀರಿನಿಂದ ಬೃಹತ್ ಕಲ್ಲಿನ ಯಕ್ಷನ ನೆರಳು ಮೇಲೆದ್ದಿತು. ಯಕ್ಷನು ಮೂರು ಕಠಿಣ ಒಗಟುಗಳನ್ನು ಬಿಡಿಸಬೇಕೆಂದು ಆಜ್ಞಾಪಿಸಿದನು.",
-                "ಪುಟ್ಟ ಆ ಭಯಾನಕ ಯಕ್ಷನ ಒಗಟುಗಳನ್ನು ಬಿಡಿಸಿ ಆ ಚಿನ್ನದ ಕೀಲಿಯನ್ನು ಪಡೆಯುತ್ತಾನಾ? ಅಥವಾ ಕಲ್ಲಿನ ಶಾಪಕ್ಕೆ ಬಲಿಯಾಗುತ್ತಾನಾ? ರೋಚಕ ಮುಂದಿನ ಭಾಗವನ್ನು ನೋಡಲು ಈಗಲೇ ಸಬ್ಸ್ಕ್ರೈಬ್ ಮಾಡಿ ಮತ್ತು ಕಾಮೆಂಟ್ ಮಾಡಿ!"
-            ]
-        ),
-        telugu=LocalizedMetadata(
-            title=f"{story['series_title']} - Part {ep_num} | తెలుగు కథలు #Shorts",
-            description=f"తెలుగులో అద్భుతమైన కథ - {story['series_title']} భాగం {ep_num}. #Shorts #TeluguStories #Folklore",
-            tags=["తెలుగు కథలు", "Telugu Stories", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Tenali Rama", "Andhra"],
-            narration_scenes=[
-                "ఒకప్పుడు విజయనగర సామ్రాజ్య వైభవంలో హంపీ పవిత్ర భూమిలో ఒక అద్భుత రహస్యం దాగి ఉంది. అర్ధరాత్రి చీకటిలో ప్రాచీన దిగుడుబావి మెట్లు వింతగా మెరుస్తున్నాయి. పురాతన గాథల ప్రకారం, ఈ బావిలో రాజవంశపు అమూల్యమైన సంపద దాగి ఉంది.",
-                "తెలివైన పన్నెండేళ్ల పుట్టా తన భుజంపై ఉన్న పచ్చని చిలుకతో కలిసి బావి వద్దకు చేరుకున్నాడు. చల్లని గాలి వీస్తోంది, దూరంగా గుడి గంటల నాదం వినిపిస్తోంది. అతని చిలుక మీనా ఎంతో అప్రమత్తంగా చుట్టూ గమనిస్తోంది.",
-                "హఠాత్తుగా నీటి లోపలి నుండి ఒక గంభీరమైన రహస్య స్వరం పుట్టా పేరును పిలిచింది. నీటి అలలపై దివ్యమైన కాంతులు వెల్లివిరిశాయి, అడుగున ఏదో మెరుస్తోంది. పుట్టా ఏమాత్రం భయపడకుండా ధైర్యంగా మెట్లు దిగడం ప్రారంభించాడు.",
-                "బావి చివరి మెట్టుపై ఒక అద్భుతమైన బంగారు తాళంచెవి కాంతివంతంగా మెరుస్తోంది. కానీ ఆ తాళంచెవిని తాకగానే నీటి నుండి ఒక భయంకర రాతి యక్షుడి నీడ ఉద్భవించింది. ఆ యక్షుడు మూడు కఠినమైన చిక్కుప్రశ్నలకు సమాధానం చెప్పమని హెచ్చరించాడు.",
-                "పుట్టా ఆ రాతి యక్షుడి ప్రశ్నలను ఛేదించి బంగారు తాళంచెవిని దక్కించుకుంటాడా? లేక రాతి శాపానికి గురవుతాడా? ఉత్కంఠభరితమైన తరువాతి భాగం కోసం ఇప్పుడే సబ్‌స్క్రైబ్ చేయండి మరియు కామెంట్ చేయండి!"
-            ]
-        ),
-        hindi=LocalizedMetadata(
-            title=f"{story['series_title']} - Part {ep_num} | हिंदी कहानियाँ #Shorts",
-            description=f"हम्पी की जादुई लोककथा - {story['series_title']} भाग {ep_num}. #Shorts #HindiKahaniya #Folklore",
-            tags=["हिंदी कहानियां", "Hindi Kahaniya", "Moral Stories", "Panchatantra", "Shorts", "Trending", "Kids Stories", "Folklore", "Tenali Raman", "Indian Myths"],
-            narration_scenes=[
-                "एक समय की बात है, विजयनगर साम्राज्य की पावन धरती हम्पी में एक अद्भुत रहस्य छिपा हुआ था। आधी रात के सन्नाटे में पुरानी बावड़ी की सीढ़ियां रहस्यमयी रोशनी से जगमगाने लगती थीं। मान्यताओं के अनुसार, इस बावड़ी के भीतर शाही खजाना दफन था।",
-                "चतुर बारह साल का बालक पुट्टा अपने कंधे पर बैठे नन्हे हरे तोते के साथ उस बावड़ी के किनारे पहुंचा। ठंडी हवाएं चल रही थीं और दूर किसी मंदिर की घंटी की गूंज सुनाई दे रही थी। उसका तोता मीना चौकन्ना होकर चारों ओर देख रहा था।",
-                "अचानक गहरे पानी के भीतर से एक भारी और रहस्यमयी आवाज ने पुट्टा का नाम पुकारा। पानी की लहरों में एक चमत्कारी दिव्य प्रकाश चमकने लगा। पुट्टा बिना डरे साहस जुटाकर धीरे-धीरे बावड़ी की सीढ़ियां उतरने लगा।",
-                "बावड़ी की सबसे निचली सीढ़ी पर एक प्राचीन सुनहरी जादुई चाबी दिव्य तेज से चमक रही थी। लेकिन जैसे ही पुट्टा आगे बढ़ा, पानी से एक विशाल पत्थर के यक्ष की भयानक छाया प्रकट हुई। यक्ष ने गरजकर तीन कठिन पहेलियों का हल मांगा।",
-                "क्या पुट्टा अपनी बुद्धिमानी से यक्ष की पहेलियों को सुलझा पाएगा या पत्थर का बन जाएगा? इस रोमांचक कहानी का अगला भाग देखने के लिए अभी सब्सक्राइब करें और कमेंट में बताएं!"
-            ]
-        )
-    )
-
-
 async def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Multi-Language YouTube Shorts Pipeline")
     parser.add_argument("--skip-upload", action="store_true", help="Render videos only; do not upload to YouTube")
     parser.add_argument("--dry-run", action="store_true", help="Run without persisting updated story state or vault")
-    parser.add_argument("--mock", action="store_true", help="Use built-in mock script (no Gemini API calls)")
-    parser.add_argument("--mock-images", action="store_true", help="Use local synthetic test canvases instead of downloading from Pollinations")
     parser.add_argument("--episode", type=int, default=None, help="Force a specific episode number")
     args = parser.parse_args()
 
-    # Load state and vault
     state = load_story_state()
     bank = load_story_bank()
     story = get_current_story(state, bank)
@@ -745,34 +667,28 @@ async def main() -> None:
 
     print("=" * 60)
     print(f"🎬 [{story['category']}] {story['series_title']}")
-    print(f"   Episode {ep_num} of {max_ep}")
+    print(f"   Episode {ep_num} of {max_ep} (Target Duration: 65-75 seconds)")
     print(f"   Character: {story['character_visual_anchor'][:80]}...")
-    if args.mock:
-        print("   Mode: MOCK DATA (No Gemini API call)")
     if args.skip_upload:
         print("   Upload: SKIPPED (--skip-upload)")
     if args.dry_run:
         print("   State Persistence: DISABLED (--dry-run)")
     print("=" * 60)
 
-    # Step 1: Generate all content with Gemini (or mock)
-    if args.mock:
-        episode_data = get_mock_episode_data(story, ep_num)
-    else:
-        episode_data = generate_episode_data(state, story)
+    # Step 1: Generate 8-scene 65-75s content with Gemini
+    episode_data = generate_episode_data(state, story)
 
-    # Step 2: Download shared images ONCE (with character visual anchoring)
+    # Step 2: Download real 3D Pixar images from Pollinations Flux API (validated > 30KB)
     work_dir = "output_build"
     images = generate_shared_images(
         episode_data.visual_prompts_english,
         os.path.join(work_dir, "shared_images"),
-        mock_images=args.mock_images,
     )
 
-    # Step 3: Ensure background music track exists
+    # Step 3: Ensure background music track
     bgm_path = ensure_bgm_track()
 
-    # Step 4: Build Shorts for each language (with Ken Burns, Captions, and BGM)
+    # Step 4: Build animated Shorts for each language (with Ken Burns, Pillow Subtitles, BGM)
     lang_map: dict[str, LocalizedMetadata] = {
         "kannada": episode_data.kannada,
         "telugu":  episode_data.telugu,
@@ -786,12 +702,11 @@ async def main() -> None:
         )
         video_paths[lang_key] = video_path
 
-        # Save localized metadata for the uploader
         meta_path = os.path.join(work_dir, f"meta_{lang_key}.json")
         with open(meta_path, "w", encoding="utf-8") as mf:
             mf.write(meta.model_dump_json(indent=2))
 
-    # Step 5: Upload to YouTube (each language to its own channel)
+    # Step 5: Upload to YouTube (if not skipped)
     if not args.skip_upload:
         try:
             from upload_to_youtube import upload_short
@@ -806,7 +721,7 @@ async def main() -> None:
                     description=meta.description,
                     tags=meta.tags,
                     lang_code=lang_code,
-                    category_id="24",  # Entertainment
+                    category_id="24",
                 )
         except ImportError:
             print("[Upload] ⚠️  upload_to_youtube.py not found — skipping upload.")
@@ -815,7 +730,7 @@ async def main() -> None:
     else:
         print("\n[Upload] ⏭️  Skipped upload as requested (--skip-upload).")
 
-    # Step 5: Advance Story State
+    # Step 6: Advance Story State
     if not args.dry_run:
         if ep_num >= max_ep:
             print(f"\n🏁 Arc complete: '{story['series_title']}'")
@@ -823,14 +738,11 @@ async def main() -> None:
         else:
             state["current_episode"] = ep_num + 1
             state["previous_summary"] = episode_data.episode_summary_for_next_part
-            print(
-                f"\n➡️  Advanced to Episode {state['current_episode']} of "
-                f"'{story['series_title']}'"
-            )
+            print(f"\n➡️  Advanced to Episode {state['current_episode']} of '{story['series_title']}'")
 
         save_story_state(state)
 
-        # Step 6: Pre-emptive vault refill check
+        # Pre-emptive vault refill check
         completed = set(state.get("completed_story_ids", []))
         remaining = sum(1 for s in bank if s["id"] not in completed)
         if remaining < 2:
