@@ -6,7 +6,9 @@ import json
 import http.client
 import httplib2
 import random
+import re
 import time
+import tempfile
 from pathlib import Path
 
 from googleapiclient.discovery import build
@@ -36,6 +38,50 @@ RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError, http.client.NotConnecte
                          http.client.IncompleteRead, http.client.ImproperConnectionState,
                          http.client.CannotSendRequest, http.client.CannotSendHeader,
                          http.client.ResponseNotReady, http.client.BadStatusLine)
+JOB_HISTORY_PATH = Path("job_history.json")
+
+
+def _load_job_history() -> dict:
+    if not JOB_HISTORY_PATH.exists():
+        return {}
+    with open(JOB_HISTORY_PATH, "r", encoding="utf-8") as f:
+        history = json.load(f)
+    if not isinstance(history, dict):
+        raise ValueError("job_history.json must contain an object keyed by episode job ID.")
+    return history
+
+
+def _save_job_history(history: dict) -> None:
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=".", delete=False
+    ) as tmp:
+        json.dump(history, tmp, indent=2, ensure_ascii=False)
+        tmp.write("\n")
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(JOB_HISTORY_PATH)
+
+
+def _valid_video_id(video_id: object) -> bool:
+    return isinstance(video_id, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id))
+
+
+def _already_uploaded(job_key: str, lang_code: str) -> str | None:
+    entry = _load_job_history().get(job_key, {}).get("uploads", {}).get(lang_code, {})
+    video_id = entry.get("video_id")
+    if entry.get("status") == "uploaded" and _valid_video_id(video_id):
+        return video_id
+    return None
+
+
+def _record_upload(job_key: str, lang_code: str, status: str, video_id: str | None = None, error: str | None = None) -> None:
+    history = _load_job_history()
+    if job_key not in history:
+        raise ValueError(f"Cannot record upload: job '{job_key}' is missing from job_history.json.")
+    uploads = history[job_key].setdefault("uploads", {})
+    uploads[lang_code] = {"status": status, "video_id": video_id}
+    if error:
+        uploads[lang_code]["error"] = error
+    _save_job_history(history)
 
 
 def _get_authenticated_service(lang_code: str):
@@ -93,7 +139,7 @@ def _resumable_upload(request) -> str:
                     print(f"    🔗 https://youtube.com/shorts/{video_id}")
                     return video_id
                 else:
-                    sys.exit(f"[FATAL] Upload failed with unexpected response: {response}")
+                    raise RuntimeError(f"Upload failed with unexpected response: {response}")
         except HttpError as e:
             if e.resp.status in RETRIABLE_STATUS_CODES:
                 error = f"HTTP {e.resp.status}: {e.content.decode()}"
@@ -105,7 +151,7 @@ def _resumable_upload(request) -> str:
         if error:
             retry += 1
             if retry > MAX_RETRIES:
-                sys.exit(f"[FATAL] Upload failed after {MAX_RETRIES} retries.")
+                raise RuntimeError(f"Upload failed after {MAX_RETRIES} retries.")
             sleep_seconds = random.random() * (2 ** retry)
             print(f"    ⚠️  Retriable error: {error}. Retrying in {sleep_seconds:.1f}s...")
             time.sleep(sleep_seconds)
@@ -118,12 +164,19 @@ def upload_short(
     description: str,
     tags: list[str],
     lang_code: str,
+    job_key: str | None = None,
     category_id: str = "24",
 ) -> str:
     """Upload a Short to the YouTube channel for the given language.
 
     Returns the uploaded video ID.
     """
+    if job_key:
+        existing_video_id = _already_uploaded(job_key, lang_code)
+        if existing_video_id:
+            print(f"[YouTube] ⏭️  {lang_code.upper()} already uploaded for {job_key}: {existing_video_id}")
+            return existing_video_id
+
     if not os.path.isfile(video_file):
         sys.exit(f"[FATAL] Video file not found: {video_file}")
 
@@ -166,7 +219,16 @@ def upload_short(
     print(f"\n[YouTube] Uploading: {title}")
     print(f"    File: {video_file}")
     print(f"    Language: {lang_code}")
-    return _resumable_upload(request)
+    try:
+        video_id = _resumable_upload(request)
+    except Exception as exc:
+        if job_key:
+            _record_upload(job_key, lang_code, "failed", error=str(exc))
+        raise
+
+    if job_key:
+        _record_upload(job_key, lang_code, "uploaded", video_id=video_id)
+    return video_id
 
 
 # =================================================================
@@ -181,6 +243,7 @@ if __name__ == "__main__":
     parser.add_argument("--title", required=True)
     parser.add_argument("--description", default="")
     parser.add_argument("--tags", nargs="*", default=[])
+    parser.add_argument("--job-key", default=None, help="Episode key in job_history.json for idempotent uploads")
     args = parser.parse_args()
 
     upload_short(
@@ -189,4 +252,5 @@ if __name__ == "__main__":
         description=args.description,
         tags=args.tags,
         lang_code=args.lang,
+        job_key=args.job_key,
     )

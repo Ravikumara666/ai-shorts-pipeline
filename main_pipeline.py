@@ -4,20 +4,24 @@ import os
 import sys
 import json
 import asyncio
+import hashlib
 import subprocess
 import shutil
 import time
 import urllib.parse
 import io
-import re
 import textwrap
+import tempfile
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageStat
 from pydantic import BaseModel, Field
 from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 import edge_tts
 from dotenv import load_dotenv
 
@@ -45,28 +49,70 @@ FFMPEG = _find_tool("ffmpeg")
 FFPROBE = _find_tool("ffprobe")
 
 
-def call_gemini_with_fallback(client: genai.Client, contents: str, config: dict):
-    """Call Gemini API with gemini-3.8-flash, falling back to gemini-2.5-flash if needed."""
-    models_to_try = [GEMINI_MODEL]
-    if "3.8" in GEMINI_MODEL:
-        models_to_try.append("gemini-2.5-flash")
-    else:
-        models_to_try.append("gemini-3.8-flash")
+GEMINI_RETRY_MODELS = tuple(dict.fromkeys((GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash")))
+GEMINI_TIMEOUT_MS = 120_000
+GEMINI_MAX_ATTEMPTS = 4
 
-    last_err = None
-    for model_name in models_to_try:
+
+def _new_gemini_client(api_key: str) -> genai.Client:
+    """Create a one-request client: macOS LibreSSL must not reuse stale keep-alive sockets."""
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=GEMINI_TIMEOUT_MS,
+            clientArgs={"limits": httpx.Limits(max_connections=1, max_keepalive_connections=0)},
+        ),
+    )
+
+
+def call_gemini_with_fallback(api_key: str, contents: str, config: dict):
+    """Generate structured JSON with a fresh no-keepalive client on every retry."""
+    last_err: Exception | None = None
+    retryable_errors = (
+        APIError,
+        httpx.HTTPError,
+        httpx.ReadError,
+        httpx.ConnectError,
+        httpx.RemoteProtocolError,
+        ConnectionResetError,
+        TimeoutError,
+    )
+
+    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+        model_name = GEMINI_RETRY_MODELS[(attempt - 1) % len(GEMINI_RETRY_MODELS)]
+        client: genai.Client | None = None
         try:
+            client = _new_gemini_client(api_key)
             return client.models.generate_content(
                 model=model_name,
                 contents=contents,
                 config=config,
             )
-        except Exception as e:
-            last_err = e
-            if "NOT_FOUND" in str(e) or "404" in str(e):
+        except retryable_errors as exc:
+            last_err = exc
+            if attempt == GEMINI_MAX_ATTEMPTS:
+                break
+            # A missing/deprecated model cannot be repaired by a new connection.
+            # Move immediately to the next configured fallback model.
+            if "NOT_FOUND" in str(exc) or "404" in str(exc):
+                print(f"[Gemini] {model_name} is unavailable; trying the next fallback model.")
                 continue
-            raise
-    raise last_err or RuntimeError("Gemini model generation failed.")
+            wait_seconds = 2 ** attempt
+            print(
+                f"[Gemini] {model_name} request failed ({type(exc).__name__}: {exc}). "
+                f"Retrying with a fresh client in {wait_seconds}s..."
+            )
+            time.sleep(wait_seconds)
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    raise RuntimeError(
+        f"Gemini generation failed after {GEMINI_MAX_ATTEMPTS} fresh-client attempts: {last_err}"
+    ) from last_err
 
 
 # =====================================================================
@@ -121,6 +167,42 @@ LANGUAGE_CONFIG: dict[str, dict[str, str]] = {
 # =====================================================================
 STORY_BANK_PATH = Path("story_bank.json")
 STORY_STATE_PATH = Path("story_state.json")
+JOB_HISTORY_PATH = Path("job_history.json")
+
+
+def _atomic_json_write(path: Path, data: dict | list) -> None:
+    """Write JSON atomically so an interrupted job never leaves a corrupt ledger."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as tmp:
+        json.dump(data, tmp, indent=2, ensure_ascii=False)
+        tmp.write("\n")
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
+
+
+def load_job_history() -> dict:
+    if not JOB_HISTORY_PATH.exists():
+        return {}
+    with open(JOB_HISTORY_PATH, "r", encoding="utf-8") as f:
+        history = json.load(f)
+    if not isinstance(history, dict):
+        raise ValueError("job_history.json must contain an object keyed by episode job ID.")
+    return history
+
+
+def save_job_history(history: dict) -> None:
+    _atomic_json_write(JOB_HISTORY_PATH, history)
+
+
+def make_job_key(story_id: str, episode: int) -> str:
+    return f"{story_id}_ep{episode}"
+
+
+def stable_prompt_hash(prompts: list[str]) -> str:
+    canonical = "\n".join(p.strip() for p in prompts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def load_story_bank() -> list[dict]:
@@ -138,9 +220,35 @@ def load_story_state() -> dict:
 
 
 def save_story_state(state: dict) -> None:
-    with open(STORY_STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+    _atomic_json_write(STORY_STATE_PATH, state)
     print("[State] ✅ story_state.json saved.")
+
+
+def validate_episode_data(episode: MultiLangEpisode) -> None:
+    """Reject malformed LLM output before spending image, render, or upload quota."""
+    if len(episode.visual_prompts_english) != NUM_SCENES:
+        raise ValueError(f"Expected {NUM_SCENES} visual prompts; got {len(episode.visual_prompts_english)}.")
+    for idx, prompt in enumerate(episode.visual_prompts_english, start=1):
+        if not prompt.strip() or len(prompt) > 240:
+            raise ValueError(f"Visual prompt {idx} is empty or exceeds 240 characters.")
+
+    script_ranges = {
+        "kannada": ("\u0c80", "\u0cff"),
+        "telugu": ("\u0c00", "\u0c7f"),
+        "hindi": ("\u0900", "\u097f"),
+    }
+    for lang, (start, end) in script_ranges.items():
+        meta: LocalizedMetadata = getattr(episode, lang)
+        if len(meta.narration_scenes) != NUM_SCENES:
+            raise ValueError(f"{lang} must contain exactly {NUM_SCENES} narration scenes.")
+        if len(meta.tags) != 10:
+            raise ValueError(f"{lang} must contain exactly 10 tags.")
+        if len(meta.title) > 100 or len(meta.description) > 5000:
+            raise ValueError(f"{lang} metadata exceeds YouTube limits.")
+        for idx, scene in enumerate(meta.narration_scenes, start=1):
+            native_chars = sum(start <= ch <= end for ch in scene)
+            if not scene.strip() or native_chars < 12:
+                raise ValueError(f"{lang} scene {idx} does not contain enough native-script text.")
 
 
 def get_current_story(state: dict, bank: list[dict]) -> dict:
@@ -185,6 +293,8 @@ def advance_to_next_story(state: dict, bank: list[dict]) -> None:
 class NewStoryEntry(BaseModel):
     id: str = Field(description="Unique story ID like story_007")
     category: str = Field(description="Category like Panchatantra Fable, South Indian Folklore, Tenali Rama Wit")
+    region: str = Field(description="Specific Indian region or tradition represented by the story")
+    source_note: str = Field(description="Source or clear note that the plot is an original dramatization")
     series_title: str = Field(description="Catchy series title for YouTube")
     character_visual_anchor: str = Field(description="Detailed 3D Pixar-style character description")
     core_plot: str = Field(description="One-paragraph plot summary with moral theme")
@@ -200,7 +310,6 @@ def refill_story_vault(existing_bank: list[dict], count: int = 4) -> None:
     if not api_key:
         sys.exit("[FATAL] GEMINI_API_KEY not set.")
 
-    client = genai.Client(api_key=api_key)
     existing_titles = [s["series_title"] for s in existing_bank]
     existing_ids = [s["id"] for s in existing_bank]
     max_id_num = max(int(sid.split("_")[1]) for sid in existing_ids) if existing_ids else 0
@@ -209,25 +318,25 @@ def refill_story_vault(existing_bank: list[dict], count: int = 4) -> None:
 EXISTING STORIES (DO NOT REPEAT):
 {json.dumps(existing_titles, indent=2)}
 
-Generate exactly {count} BRAND NEW authentic Indian folklore story arcs (Panchatantra, Tenali Rama, Vikram Betal, regional legends).
+Generate exactly {count} BRAND NEW Indian story arcs (Panchatantra, Tenali Rama, Vikram Betal, regional legends).
 Each story needs a character_visual_anchor and exactly 5 episode beats (Part 1 through 5).
+Include a specific region and source_note. If a plot is invented or heavily adapted, source_note must say so instead of making a false historical claim.
 Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num + 2).zfill(3)}, etc."""
 
     print(f"[Vault Refill] Generating {count} new stories with Gemini...")
     response = call_gemini_with_fallback(
-        client,
+        api_key,
         contents=prompt,
         config={
             "response_mime_type": "application/json",
             "response_schema": StoryVaultRefill,
-            "temperature": 0.9,
+            "temperature": 0.7,
         },
     )
     refill = StoryVaultRefill.model_validate_json(response.text)
     new_entries = [entry.model_dump() for entry in refill.new_stories]
     updated_bank = existing_bank + new_entries
-    with open(STORY_BANK_PATH, "w", encoding="utf-8") as f:
-        json.dump(updated_bank, f, indent=4, ensure_ascii=False)
+    _atomic_json_write(STORY_BANK_PATH, updated_bank)
     print(f"[Vault Refill] ✅ Added {len(new_entries)} new stories to vault.")
 
 
@@ -238,8 +347,6 @@ def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("[FATAL] GEMINI_API_KEY not set. Add it to .env or environment.")
-
-    client = genai.Client(api_key=api_key)
 
     ep_num = state["current_episode"]
     max_ep = state["max_episodes_in_arc"]
@@ -260,6 +367,8 @@ def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
 STORY DETAILS:
 - Series: {story['series_title']}
 - Category: {story['category']}
+- Region / tradition: {story.get('region', 'Indian folklore')}
+- Source framing: {story.get('source_note', 'Original dramatization')}
 - Core Plot: {story['core_plot']}
 - Current Episode: Part {ep_num} of {max_ep}
 - Beat to Follow: {current_beat}
@@ -284,15 +393,16 @@ CRITICAL DURATION & LENGTH REQUIREMENTS (TARGET: 65 TO 75 SECONDS TOTAL):
 
     print(f"[Gemini] Generating '{story['series_title']}' Part {ep_num} ({NUM_SCENES} scenes for ~70s runtime)...")
     response = call_gemini_with_fallback(
-        client,
+        api_key,
         contents=prompt,
         config={
             "response_mime_type": "application/json",
             "response_schema": MultiLangEpisode,
-            "temperature": 0.75,
+            "temperature": 0.7,
         },
     )
     episode = MultiLangEpisode.model_validate_json(response.text)
+    validate_episode_data(episode)
     print("[Gemini] ✅ Episode data generated successfully.")
     return episode
 
@@ -301,46 +411,67 @@ CRITICAL DURATION & LENGTH REQUIREMENTS (TARGET: 65 TO 75 SECONDS TOTAL):
 # 5. DOWNLOAD REAL 3D PIXAR IMAGES (NO SOLID COLOR FALLBACK!)
 # =====================================================================
 def _validate_image_content(content: bytes) -> bool:
-    """Validate that downloaded bytes form a real, non-solid-color image."""
+    """Validate image bytes and reject undersized, corrupt, or near-solid frames."""
     if len(content) < 30_000:
         return False
     try:
-        img = Image.open(io.BytesIO(content))
-        extrema = img.convert("L").getextrema()
-        # Ensure variance between min and max pixel brightness (not a flat solid color)
-        return (extrema[1] - extrema[0]) >= 25
+        with Image.open(io.BytesIO(content)) as source:
+            img = source.convert("RGB")
+            img.load()
+        return max(ImageStat.Stat(img).stddev) > 25
     except Exception:
         return False
 
 
-def _download_via_imagen3(prompt: str, img_path: str, gemini_api_key: str) -> bool:
-    """Fallback: Generate real 3D Pixar 9:16 vertical image using Google Imagen 3 via Gemini API."""
+def _find_generated_file(value: object) -> Optional[Path]:
+    """Extract a local image path from the few response shapes Gradio Spaces use."""
+    if isinstance(value, str):
+        path = Path(value)
+        return path if path.is_file() else None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _find_generated_file(item)
+            if found:
+                return found
+    if isinstance(value, dict):
+        for item in value.values():
+            found = _find_generated_file(item)
+            if found:
+                return found
+    return None
+
+
+def _download_via_hf_flux(prompt: str, img_path: str, seed: int) -> bool:
+    """Best-effort free fallback through the FLUX.1-schnell Hugging Face Space."""
     try:
-        print("[Visuals] 🎨 Attempting Google Imagen 3 fallback (imagen-3.0-generate-002)...")
-        client = genai.Client(api_key=gemini_api_key)
-        resp = client.models.generate_images(
-            model="imagen-3.0-generate-002",
+        from gradio_client import Client
+
+        print("[Visuals] 🎨 Pollinations unavailable; trying Hugging Face FLUX.1-schnell...")
+        token = os.getenv("HF_TOKEN", "").strip() or None
+        client = Client("black-forest-labs/FLUX.1-schnell", hf_token=token)
+        result = client.predict(
             prompt=prompt,
-            config=dict(
-                number_of_images=1,
-                aspect_ratio="9:16",
-                output_mime_type="image/jpeg",
-            ),
+            seed=seed,
+            randomize_seed=False,
+            width=768,
+            height=1365,
+            num_inference_steps=4,
+            api_name="/infer",
         )
-        if resp.generated_images:
-            img_bytes = resp.generated_images[0].image.image_bytes
-            if _validate_image_content(img_bytes):
-                with open(img_path, "wb") as f:
-                    f.write(img_bytes)
-                print(f"[Visuals] ✅ Scene saved via Google Imagen 3 ({len(img_bytes) // 1024} KB)")
+        generated_path = _find_generated_file(result)
+        if generated_path:
+            image_bytes = generated_path.read_bytes()
+            if _validate_image_content(image_bytes):
+                Path(img_path).write_bytes(image_bytes)
+                print(f"[Visuals] ✅ Scene saved via Hugging Face FLUX ({len(image_bytes) // 1024} KB)")
                 return True
     except Exception as e:
-        print(f"[Visuals] ⚠️  Google Imagen 3 fallback attempt failed: {e}")
+        print(f"[Visuals] ⚠️  Hugging Face FLUX fallback failed: {e}")
     return False
 
 
-def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_api_key: str = "") -> list[str]:
-    """Download real 3D Pixar vertical images from Pollinations with Imagen 3 fallback and strict validation."""
+def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[str]:
+    """Generate prompt-hashed episode images via Pollinations, then free HF FLUX fallback."""
     os.makedirs(output_dir, exist_ok=True)
     image_paths: list[str] = []
     pollinations_key = os.getenv("POLLINATIONS_API_KEY", "").strip()
@@ -352,7 +483,8 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_ap
         headers["Authorization"] = f"Bearer {pollinations_key}"
 
     for idx, prompt in enumerate(visual_prompts):
-        img_path = os.path.join(output_dir, f"scene_{idx}.jpg")
+        prompt_hash = hashlib.sha256(prompt.strip().encode("utf-8")).hexdigest()
+        img_path = os.path.join(output_dir, f"scene_{idx}_{prompt_hash[:8]}.jpg")
 
         # Skip if already downloaded and verified
         if os.path.isfile(img_path):
@@ -361,6 +493,7 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_ap
                     print(f"[Visuals] Scene {idx + 1}/{len(visual_prompts)} verified cached image exists, skipping.")
                     image_paths.append(img_path)
                     continue
+            Path(img_path).unlink(missing_ok=True)
 
         # Keep prompt concise to prevent HTTP 414 / Cloudflare rejection
         clean_prompt = prompt.replace("\n", " ").strip()
@@ -368,35 +501,20 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_ap
             clean_prompt = clean_prompt[:235] + ", 9:16 vertical"
         encoded = urllib.parse.quote(clean_prompt)
 
-        # Endpoints to try (Flux -> Turbo -> Standard)
+        # Pollinations Flux first, then Turbo. No paid/obsolete provider fallback.
         key_query = f"&key={pollinations_key}" if pollinations_key else ""
         endpoints = [
             f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=flux{key_query}",
             f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo{key_query}",
-            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true{key_query}",
         ]
 
         saved = False
 
-        for attempt in range(1, 6):
+        for attempt in range(1, 4):
             endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
             try:
                 print(f"[Visuals] Downloading Scene {idx + 1}/{len(visual_prompts)} (attempt {attempt}/5)...")
                 resp = requests.get(endpoint_url, headers=headers, timeout=90)
-
-                if resp.status_code == 402:
-                    wait_sec = 35
-                    try:
-                        err_json = resp.json()
-                        msg = err_json.get("error", {}).get("message", "")
-                        match = re.search(r"Retry after (\d+)s", msg)
-                        if match:
-                            wait_sec = int(match.group(1)) + 3
-                    except Exception:
-                        pass
-                    print(f"[Visuals] ⏳ Free IP limit hit (1 image/45s). Auto-waiting {wait_sec}s cooldown...")
-                    time.sleep(wait_sec)
-                    continue
 
                 resp.raise_for_status()
 
@@ -413,14 +531,13 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_ap
                 print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
                 time.sleep(wait)
 
-        # If Pollinations failed or hit 402, try Google Imagen 3 fallback
-        if not saved and gemini_api_key:
-            saved = _download_via_imagen3(clean_prompt, img_path, gemini_api_key)
+        if not saved:
+            saved = _download_via_hf_flux(clean_prompt, img_path, seed=100 + idx)
 
         if not saved:
             sys.exit(
                 f"[FATAL] Failed to download real 3D Pixar image for Scene {idx + 1}. "
-                "Check network connection, Pollinations API key, or Google Imagen 3 access. Never falling back to solid color."
+                "Check Pollinations, Hugging Face Space availability, or HF_TOKEN. Never falling back to solid color."
             )
 
         image_paths.append(img_path)
@@ -463,16 +580,29 @@ def _get_indic_font(lang: str, size: int = 46) -> ImageFont.FreeTypeFont:
 
 
 def create_subtitle_overlay_png(text: str, lang: str, out_png: str) -> str:
-    """Generate a transparent 1080x1920 PNG with bold yellow text, black outline, and dark pill."""
+    """Generate a readable phrase subtitle card without dropping any words."""
     overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    font = _get_indic_font(lang, size=46)
-
-    # Wrap to ~28-30 characters per line
-    lines = textwrap.wrap(text, width=30)
-    if len(lines) > 3:
-        lines = lines[:3]  # Keep to 3 lines max for visual clarity
-    wrapped = "\n".join(lines)
+    words = text.split()
+    wrapped = text
+    font = _get_indic_font(lang, size=54)
+    for size in range(54, 27, -2):
+        font = _get_indic_font(lang, size=size)
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            trial = f"{current} {word}".strip()
+            if draw.textlength(trial, font=font) <= 920:
+                current = trial
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        wrapped = "\n".join(lines)
+        if len(lines) <= 3:
+            break
 
     bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=14, align="center")
     w = bbox[2] - bbox[0]
@@ -503,6 +633,25 @@ def create_subtitle_overlay_png(text: str, lang: str, out_png: str) -> str:
 
     overlay.save(out_png, "PNG")
     return out_png
+
+
+def subtitle_phrases(text: str, duration: float, max_words: int = 7) -> list[tuple[str, float, float]]:
+    """Split narration into short, sequential cards spanning the measured TTS duration."""
+    words = text.split()
+    if not words:
+        return []
+    chunks = [" ".join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
+    total_words = max(1, len(words))
+    current = 0.0
+    timing: list[tuple[str, float, float]] = []
+    for chunk in chunks:
+        chunk_duration = duration * (len(chunk.split()) / total_words)
+        end = min(duration, current + chunk_duration)
+        timing.append((chunk, current, end))
+        current = end
+    phrase, start, _ = timing[-1]
+    timing[-1] = (phrase, start, duration)
+    return timing
 
 
 # =====================================================================
@@ -572,9 +721,11 @@ async def build_language_video(
     segment_files: list[str] = []
     total_running_time = 0.0
 
+    if len(meta.narration_scenes) != len(image_paths):
+        raise ValueError(f"{lang_key} narration/image scene counts do not match.")
+
     for i, (scene_text, img_path) in enumerate(zip(meta.narration_scenes, image_paths)):
         audio_path = os.path.join(lang_dir, f"audio_{i}.mp3")
-        overlay_png = os.path.join(lang_dir, f"sub_{i}.png")
         seg_path = os.path.join(lang_dir, f"seg_{i}.mp4")
 
         # 1. Synthesize audio
@@ -585,8 +736,13 @@ async def build_language_video(
         total_running_time += total_seg_duration
         frames = int(total_seg_duration * 30) + 2
 
-        # 3. Create Pillow subtitle overlay PNG
-        create_subtitle_overlay_png(scene_text, lang_key, overlay_png)
+        # 3. Create phrase-timed subtitle overlays that cover the complete narration.
+        phrase_timing = subtitle_phrases(scene_text, duration)
+        overlay_paths: list[str] = []
+        for phrase_idx, (phrase, _start, _end) in enumerate(phrase_timing):
+            overlay_path = os.path.join(lang_dir, f"sub_{i}_{phrase_idx}.png")
+            create_subtitle_overlay_png(phrase, lang_key, overlay_path)
+            overlay_paths.append(overlay_path)
 
         # 4. Alternating dynamic camera movement (smooth push-in vs pull-out)
         if i % 2 == 0:
@@ -607,28 +763,39 @@ async def build_language_video(
             )
 
         fade_out_st = max(0.1, total_seg_duration - 0.3)
-        vf_filter = (
-            f"[0:v]scale=1080:1920,{cam_expr}[bg];"
-            f"[bg][1:v]overlay=0:0,"
-            f"fade=t=in:st=0:d=0.3,fade=t=out:st={fade_out_st:.2f}:d=0.3,"
-            f"format=yuv420p[vout]"
+        filters = [f"[0:v]scale=1080:1920,{cam_expr}[bg]"]
+        current_label = "bg"
+        for phrase_idx, (_phrase, start, end) in enumerate(phrase_timing):
+            next_label = f"caption_{i}_{phrase_idx}"
+            filters.append(
+                f"[{current_label}][{phrase_idx + 1}:v]overlay=0:0:"
+                f"enable='between(t,{start:.3f},{end:.3f})'[{next_label}]"
+            )
+            current_label = next_label
+        filters.append(
+            f"[{current_label}]fade=t=in:st=0:d=0.3,fade=t=out:st={fade_out_st:.2f}:d=0.3,"
+            "format=yuv420p[vout]"
         )
+        vf_filter = ";".join(filters)
 
         ffmpeg_cmd = [
             FFMPEG, "-y",
             "-loop", "1", "-i", os.path.abspath(img_path),
-            "-i", os.path.abspath(overlay_png),
+        ]
+        for overlay_path in overlay_paths:
+            ffmpeg_cmd.extend(["-loop", "1", "-i", os.path.abspath(overlay_path)])
+        ffmpeg_cmd.extend([
             "-i", os.path.abspath(audio_path),
-            "-t", f"{total_seg_duration:.3f}",
             "-filter_complex", vf_filter,
             "-map", "[vout]",
-            "-map", "2:a",
+            "-map", f"{len(overlay_paths) + 1}:a",
+            "-t", f"{total_seg_duration:.3f}",
             "-c:v", "libx264", "-preset", "veryfast",
             "-af", "apad=pad_dur=0.40",
             "-c:a", "aac", "-b:a", "128k",
             "-ar", "44100", "-ac", "2",
             os.path.abspath(seg_path),
-        ]
+        ])
         subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         segment_files.append(seg_path)
         print(f"    ✅ Scene {i + 1}/{len(meta.narration_scenes)} rendered ({total_seg_duration:.2f}s, sub overlay applied)")
@@ -678,7 +845,7 @@ async def build_language_video(
     else:
         shutil.copyfile(concat_mp4, final_mp4)
 
-    # 7. Hard Verification of Video Duration (MUST BE >= 60.0s)
+    # 7. Hard verification before an episode can enter the upload ledger.
     dur_cmd = [
         FFPROBE, "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", final_mp4,
@@ -686,10 +853,12 @@ async def build_language_video(
     final_duration = float(subprocess.check_output(dur_cmd).decode().strip())
     print(f"[{lang_key.upper()}] ⏱️  Final Short Duration: {final_duration:.2f} seconds")
 
-    if final_duration < 60.0:
-        print(f"[{lang_key.upper()}] ⚠️  WARNING: Duration ({final_duration:.2f}s) is under 60 seconds target.")
-    else:
-        print(f"[{lang_key.upper()}] 🎯 ✅ DURATION VERIFIED: {final_duration:.2f}s (>= 60s target achieved!)")
+    if not 60.0 <= final_duration <= 75.0:
+        raise ValueError(
+            f"{lang_key} render is {final_duration:.2f}s; expected 60.0-75.0s. "
+            "Refusing to upload an out-of-range Short."
+        )
+    print(f"[{lang_key.upper()}] 🎯 ✅ DURATION VERIFIED: {final_duration:.2f}s")
 
     print(f"[{lang_key.upper()}] ✅ Final Short -> {final_mp4}")
     return final_mp4
@@ -705,7 +874,14 @@ async def main() -> None:
     parser.add_argument("--skip-upload", action="store_true", help="Render videos only; do not upload to YouTube")
     parser.add_argument("--dry-run", action="store_true", help="Run without persisting updated story state or vault")
     parser.add_argument("--episode", type=int, default=None, help="Force a specific episode number")
+    parser.add_argument(
+        "--advance-on-render", action="store_true",
+        help="Offline-only: advance state after a successful render without YouTube uploads.",
+    )
     args = parser.parse_args()
+
+    if args.advance_on_render and not args.skip_upload:
+        parser.error("--advance-on-render requires --skip-upload.")
 
     state = load_story_state()
     bank = load_story_bank()
@@ -716,6 +892,8 @@ async def main() -> None:
 
     ep_num = state["current_episode"]
     max_ep = state["max_episodes_in_arc"]
+    job_key = make_job_key(story["id"], ep_num)
+    work_dir = os.path.join("output_build", job_key)
 
     print("=" * 60)
     print(f"🎬 [{story['category']}] {story['series_title']}")
@@ -730,12 +908,10 @@ async def main() -> None:
     # Step 1: Generate 8-scene 65-75s content with Gemini
     episode_data = generate_episode_data(state, story)
 
-    # Step 2: Download real 3D Pixar images from Pollinations with Imagen 3 fallback
-    work_dir = "output_build"
+    # Step 2: Generate only inside this episode's immutable namespace.
     images = generate_shared_images(
         episode_data.visual_prompts_english,
         os.path.join(work_dir, "shared_images"),
-        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
     )
 
     # Step 3: Ensure background music track
@@ -759,32 +935,66 @@ async def main() -> None:
         with open(meta_path, "w", encoding="utf-8") as mf:
             mf.write(meta.model_dump_json(indent=2))
 
+    manifest = {
+        "job_key": job_key,
+        "story_id": story["id"],
+        "episode": ep_num,
+        "prompt_hash": stable_prompt_hash(episode_data.visual_prompts_english),
+        "visual_prompts": episode_data.visual_prompts_english,
+        "image_paths": images,
+        "video_paths": video_paths,
+        "metadata": {lang: meta.model_dump() for lang, meta in lang_map.items()},
+    }
+    _atomic_json_write(Path(work_dir) / "episode_manifest.json", manifest)
+
+    history = load_job_history()
+    job = history.setdefault(job_key, {})
+    job.update({
+        "story_id": story["id"],
+        "episode": ep_num,
+        "prompt_hash": manifest["prompt_hash"],
+        "status": "rendered",
+        "manifest_path": str(Path(work_dir) / "episode_manifest.json"),
+    })
+    uploads = job.setdefault("uploads", {})
+    for lang_code in ("kn", "te", "hi"):
+        uploads.setdefault(lang_code, {"status": "pending", "video_id": None})
+    save_job_history(history)
+    print(f"[Ledger] ✅ {job_key} recorded as rendered.")
+
     # Step 5: Upload to YouTube (if not skipped)
     if not args.skip_upload:
-        try:
-            from upload_to_youtube import upload_short
+        from upload_to_youtube import upload_short
 
-            for lang_key, vpath in video_paths.items():
-                lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
-                meta = lang_map[lang_key]
-                print(f"\n[Upload] Uploading {lang_key.upper()} Short to YouTube...")
-                upload_short(
-                    video_file=vpath,
-                    title=meta.title,
-                    description=meta.description,
-                    tags=meta.tags,
-                    lang_code=lang_code,
-                    category_id="24",
-                )
-        except ImportError:
-            print("[Upload] ⚠️  upload_to_youtube.py not found — skipping upload.")
-        except Exception as e:
-            print(f"[Upload] ⚠️  Upload failed: {e}")
+        for lang_key, vpath in video_paths.items():
+            lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
+            meta = lang_map[lang_key]
+            print(f"\n[Upload] Uploading {lang_key.upper()} Short to YouTube...")
+            upload_short(
+                video_file=vpath,
+                title=meta.title,
+                description=meta.description,
+                tags=meta.tags,
+                lang_code=lang_code,
+                job_key=job_key,
+                category_id="24",
+            )
     else:
         print("\n[Upload] ⏭️  Skipped upload as requested (--skip-upload).")
 
-    # Step 6: Advance Story State
-    if not args.dry_run:
+    # Step 6: Advance only after the durable ledger confirms every channel upload.
+    history = load_job_history()
+    completed_uploads = all(
+        history.get(job_key, {}).get("uploads", {}).get(code, {}).get("status") == "uploaded"
+        and history[job_key]["uploads"][code].get("video_id")
+        for code in ("kn", "te", "hi")
+    )
+    can_advance = completed_uploads or args.advance_on_render
+    if completed_uploads:
+        history[job_key]["status"] = "completed"
+        save_job_history(history)
+
+    if not args.dry_run and can_advance:
         if ep_num >= max_ep:
             print(f"\n🏁 Arc complete: '{story['series_title']}'")
             advance_to_next_story(state, bank)
@@ -795,12 +1005,17 @@ async def main() -> None:
 
         save_story_state(state)
 
-        # Pre-emptive vault refill check
+        # Refill is non-critical after completion: do not turn a published job into a failed run.
         completed = set(state.get("completed_story_ids", []))
         remaining = sum(1 for s in bank if s["id"] not in completed)
         if remaining < 2:
-            print(f"\n[Vault] Only {remaining} stories remaining. Pre-emptive refill...")
-            refill_story_vault(load_story_bank(), count=4)
+            try:
+                print(f"\n[Vault] Only {remaining} stories remaining. Pre-emptive refill...")
+                refill_story_vault(load_story_bank(), count=4)
+            except Exception as exc:
+                print(f"[Vault] ⚠️  Refill deferred: {exc}")
+    elif not args.dry_run:
+        print("[State] Uploads are incomplete; state was intentionally not advanced.")
     else:
         print("\n[State] ⏭️  Skipped state advancement (--dry-run).")
 

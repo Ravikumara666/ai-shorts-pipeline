@@ -2,6 +2,8 @@
     {
         "id": "story_001",
         "category": "Vijayanagara Mystery",
+        "region": "Karnataka / Hampi",
+        "source_note": "Original fictional adventure inspired by the history and landscape of Hampi; present it as dramatization, not documented folklore.",
         "series_title": "The Whispering Well of Hampi",
         "character_visual_anchor": "A clever 12-year-old South Indian village boy named Putta with warm brown skin, bright curious eyes, wearing a bright saffron dhoti with golden border and a small blue turban with a red feather, accompanied by a tiny emerald-green parrot with a golden beak perched on his shoulder, 3D Pixar Disney animation style, vibrant warm lighting, detailed Indian village backdrop",
         "core_plot": "An ancient stepwell in Hampi whispers where royal Vijayanagara treasure is hidden, but turns anyone greedy into stone. Only a pure-hearted child can break the curse.",
@@ -16,6 +18,8 @@
     {
         "id": "story_002",
         "category": "Tenali Rama Wit",
+        "region": "Andhra Pradesh / Vijayanagara",
+        "source_note": "Original Tenali-style moral tale; do not present this specific mango-tree plot as a historical incident.",
         "series_title": "Tenali Rama and the Golden Mango Tree",
         "character_visual_anchor": "Tenali Rama as a clever witty 30-year-old South Indian courtier with a sharp angular face, mischievous twinkling eyes, wearing ornate Vijayanagara royal cream and gold silk robes with a tall elegant red and gold turban, holding a wooden walking staff, 3D Pixar Disney animation style, grand Vijayanagara palace interior with carved pillars",
         "core_plot": "Emperor Krishnadevaraya challenges his ministers to grow a tree bearing pure gold mangoes overnight. Every minister tries to cheat. Only Tenali Rama's brilliant trick reveals the true meaning of gold.",
@@ -30,6 +34,8 @@
     {
         "id": "story_003",
         "category": "Panchatantra Fable",
+        "region": "Pan-Indian Sanskrit fable tradition",
+        "source_note": "Adapted from the well-known monkey-and-crocodile fable tradition; local dialogue and scene details are dramatized.",
         "series_title": "The Monkey King and the Crocodile's Heart",
         "character_visual_anchor": "A playful wise young monkey king with golden-brown fur, a tiny jeweled crown, and a red silk scarf around his neck, sitting in a massive banyan tree overhanging a sparkling blue river, 3D Pixar Disney animation style, lush tropical Indian forest, dappled sunlight, vibrant greens and blues",
         "core_plot": "A monkey king befriends a crocodile, but the crocodile's jealous wife demands the monkey's heart for dinner. The monkey must use his wit to survive betrayal by his closest friend.",
@@ -44,6 +50,8 @@
     {
         "id": "story_004",
         "category": "South Indian Folklore",
+        "region": "Karnataka / Mysuru",
+        "source_note": "Original magical adventure set around Mysore Palace; separate the fictional guardian story from real Dasara history.",
         "series_title": "The Dancing Peacock of Mysore Palace",
         "character_visual_anchor": "A magnificent magical peacock with iridescent sapphire-blue and emerald-green feathers that glow with inner light, a golden crown on its head, dancing in front of Mysore Palace at sunset, and a young 10-year-old Kannada girl named Kaveri with long braided hair and jasmine flowers wearing a bright green silk pavadai, 3D Pixar Disney animation style, golden sunset lighting, ornate palace architecture",
         "core_plot": "A magical peacock that guards Mysore Palace can only be seen by pure-hearted children. When the palace is threatened by a shadow curse, only little Kaveri and the peacock can save it.",
@@ -58,6 +66,8 @@
     {
         "id": "story_005",
         "category": "Mythological Adventure",
+        "region": "Indian epic tradition",
+        "source_note": "Inspired by Hanuman and the Sanjeevani episode from the Ramayana; preserve respectful framing and mark invented details as dramatization.",
         "series_title": "Hanuman's Secret Mountain Quest",
         "character_visual_anchor": "Young Hanuman as a powerful but humble monkey warrior with bright golden fur, wearing a red silk dhoti and a golden chest armor plate, carrying a tiny glowing mace, with Himalayan snow peaks behind him, 3D Pixar Disney animation style, epic dramatic lighting, snow and clouds swirling",
         "core_plot": "Young Hanuman must find the legendary Sanjeevani herb on a magical mountain to save his injured guru, but the mountain itself is alive and tests him with illusions.",
@@ -72,6 +82,8 @@
     {
         "id": "story_006",
         "category": "Village Wisdom",
+        "region": "South Indian village fiction",
+        "source_note": "Original fictional moral tale, not a documented historical or folk account.",
         "series_title": "The Clever Weaver's Flying Cloth",
         "character_visual_anchor": "A thin, kind-faced elderly Indian village weaver named Devaiah with silver hair, round spectacles, wearing a simple white cotton dhoti and a faded blue shawl, sitting at a large wooden handloom weaving colorful silk fabric that magically glows, in a small South Indian village house, 3D Pixar Disney animation style, warm cozy indoor lighting with golden thread particles floating in air",
         "core_plot": "An old weaver accidentally weaves a cloth that can fly. The greedy king wants it for war, but the weaver must protect his magical creation for the good of the village.",
