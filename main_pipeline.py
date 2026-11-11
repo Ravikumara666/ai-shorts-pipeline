@@ -312,13 +312,43 @@ def _validate_image_content(content: bytes) -> bool:
         return False
 
 
-def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[str]:
-    """Download real 3D Pixar vertical images from Pollinations Flux API with strict validation."""
+def _download_via_imagen3(prompt: str, img_path: str, gemini_api_key: str) -> bool:
+    """Fallback: Generate real 3D Pixar 9:16 vertical image using Google Imagen 3 via Gemini API."""
+    try:
+        print("[Visuals] 🎨 Attempting Google Imagen 3 fallback (imagen-3.0-generate-002)...")
+        client = genai.Client(api_key=gemini_api_key)
+        resp = client.models.generate_images(
+            model="imagen-3.0-generate-002",
+            prompt=prompt,
+            config=dict(
+                number_of_images=1,
+                aspect_ratio="9:16",
+                output_mime_type="image/jpeg",
+            ),
+        )
+        if resp.generated_images:
+            img_bytes = resp.generated_images[0].image.image_bytes
+            if _validate_image_content(img_bytes):
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
+                print(f"[Visuals] ✅ Scene saved via Google Imagen 3 ({len(img_bytes) // 1024} KB)")
+                return True
+    except Exception as e:
+        print(f"[Visuals] ⚠️  Google Imagen 3 fallback attempt failed: {e}")
+    return False
+
+
+def generate_shared_images(visual_prompts: list[str], output_dir: str, gemini_api_key: str = "") -> list[str]:
+    """Download real 3D Pixar vertical images from Pollinations with Imagen 3 fallback and strict validation."""
     os.makedirs(output_dir, exist_ok=True)
     image_paths: list[str] = []
+    pollinations_key = os.getenv("POLLINATIONS_API_KEY", "").strip()
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    if pollinations_key:
+        headers["Authorization"] = f"Bearer {pollinations_key}"
 
     for idx, prompt in enumerate(visual_prompts):
         img_path = os.path.join(output_dir, f"scene_{idx}.jpg")
@@ -338,13 +368,16 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
         encoded = urllib.parse.quote(clean_prompt)
 
         # Endpoints to try (Flux -> Turbo -> Standard)
+        key_query = f"&key={pollinations_key}" if pollinations_key else ""
         endpoints = [
-            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=flux",
-            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo",
-            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true",
+            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=flux{key_query}",
+            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo{key_query}",
+            f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true{key_query}",
         ]
 
         saved = False
+        hit_402 = False
+
         for attempt in range(1, 4):
             endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
             try:
@@ -360,15 +393,27 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
                     break
                 else:
                     print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
+            except requests.exceptions.HTTPError as http_err:
+                if resp.status_code == 402:
+                    print(f"[Visuals] ⚠️  Pollinations returned 402 (Payment/Key Required).")
+                    hit_402 = True
+                    break
+                wait = 4 * attempt
+                print(f"[Visuals] ⚠️  Attempt {attempt} failed: {http_err}. Retrying in {wait}s...")
+                time.sleep(wait)
             except Exception as e:
                 wait = 4 * attempt
                 print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
                 time.sleep(wait)
 
+        # If Pollinations failed or hit 402, try Google Imagen 3 fallback
+        if not saved and gemini_api_key:
+            saved = _download_via_imagen3(clean_prompt, img_path, gemini_api_key)
+
         if not saved:
             sys.exit(
                 f"[FATAL] Failed to download real 3D Pixar image for Scene {idx + 1}. "
-                "Check network connection or Pollinations status. Never falling back to solid color."
+                "Check network connection, Pollinations API key, or Google Imagen 3 access. Never falling back to solid color."
             )
 
         image_paths.append(img_path)
@@ -678,11 +723,12 @@ async def main() -> None:
     # Step 1: Generate 8-scene 65-75s content with Gemini
     episode_data = generate_episode_data(state, story)
 
-    # Step 2: Download real 3D Pixar images from Pollinations Flux API (validated > 30KB)
+    # Step 2: Download real 3D Pixar images from Pollinations with Imagen 3 fallback
     work_dir = "output_build"
     images = generate_shared_images(
         episode_data.visual_prompts_english,
         os.path.join(work_dir, "shared_images"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
     )
 
     # Step 3: Ensure background music track
