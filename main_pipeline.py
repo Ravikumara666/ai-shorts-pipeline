@@ -42,19 +42,38 @@ IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "auto").lower()
 MIN_DURATION_SEC = float(os.getenv("MIN_DURATION_SEC", "30"))
 MAX_DURATION_SEC = float(os.getenv("MAX_DURATION_SEC", "180"))
 
+# Target final Short length (seconds). The per-language narration word budget is
+# derived from this and each voice's approx speaking rate, so Kannada/Telugu/Hindi
+# all land near the same length despite speaking at different speeds. One knob.
+TARGET_DURATION_SEC = float(os.getenv("TARGET_DURATION_SEC", "55"))
+# Effective seconds per *requested* word, measured end-to-end (includes the model
+# tending to over-write, esp. Hindi) so all three languages land near the target.
+_LANG_SEC_PER_WORD = {"kannada": 0.59, "telugu": 0.58, "hindi": 0.64}
+
+
+def _narration_word_target(lang_key: str) -> int:
+    """Words per scene to land ~TARGET_DURATION_SEC total at the current scene count."""
+    per_scene_audio = max(2.5, (TARGET_DURATION_SEC / max(1, NUM_SCENES)) - 0.4)
+    words = round(per_scene_audio / _LANG_SEC_PER_WORD.get(lang_key, 0.5))
+    return max(6, min(24, words))
+
 
 # =====================================================================
 # 0. TOOL PATHS — prefer Homebrew on macOS, fallback to PATH
 # =====================================================================
 def _find_tool(name: str) -> str:
-    """Locate ffmpeg / ffprobe, preferring Homebrew install."""
+    """Locate ffmpeg / ffprobe. An explicit FFMPEG_BINARY / FFPROBE_BINARY env var
+    wins — robust on Windows where editing PATH can silently fail."""
+    override = os.getenv(f"{name.upper()}_BINARY", "").strip().strip('"')
+    if override and os.path.isfile(override):
+        return override
     for candidate in [f"/opt/homebrew/bin/{name}", shutil.which(name) or ""]:
         if candidate and os.path.isfile(candidate):
             return candidate
     result = shutil.which(name)
     if result:
         return result
-    sys.exit(f"[FATAL] {name} not found. Install via: brew install ffmpeg")
+    sys.exit(f"[FATAL] {name} not found. Install ffmpeg, or set {name.upper()}_BINARY to its full path.")
 
 
 FFMPEG = _find_tool("ffmpeg")
@@ -170,7 +189,7 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict
 class LocalizedMetadata(BaseModel):
     title: str = Field(description="YouTube title with Part X and #Shorts, max 100 chars")
     description: str = Field(description="YouTube description with 3-4 hashtags and SEO keywords, max 5000 chars")
-    tags: list[str] = Field(description="Exactly 10 high-search regional SEO tags")
+    tags: list[str] = Field(description="12 high-search SEO tags: trending + genre + niche mix (no '#')")
     narration_scenes: list[str] = Field(
         description=(
             f"Exactly {NUM_SCENES} voiceover narrations in native script. Each scene is "
@@ -290,8 +309,8 @@ def validate_episode_data(episode: MultiLangEpisode) -> None:
         meta: LocalizedMetadata = getattr(episode, lang)
         if len(meta.narration_scenes) != NUM_SCENES:
             raise ValueError(f"{lang} must contain exactly {NUM_SCENES} narration scenes.")
-        if len(meta.tags) != 10:
-            raise ValueError(f"{lang} must contain exactly 10 tags.")
+        if not 10 <= len(meta.tags) <= 15:
+            raise ValueError(f"{lang} must contain 10-15 tags; got {len(meta.tags)}.")
         if len(meta.title) > 100 or len(meta.description) > 5000:
             raise ValueError(f"{lang} metadata exceeds YouTube limits.")
         for idx, scene in enumerate(meta.narration_scenes, start=1):
@@ -472,7 +491,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
     resp1 = call_gemini_with_fallback(api_key, call1_prompt)
     raw1 = resp1.text.strip().removeprefix("```json").removesuffix("```").strip()
     try:
-        call1_data = json.loads(raw1)
+        call1_data = json.loads(raw1, strict=False)
     except Exception as e:
         print(f"[Gemini] Error parsing Call 1 JSON: {e}\nRaw: {raw1[:300]}")
         raise
@@ -497,23 +516,23 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
         "kannada": {
             "name": "Kannada",
             "script": "Kannada script ಕನ್ನಡ",
-            "example_title": f"{story['series_title']} Part {ep_num} | #Shorts",
-            "example_desc": f"ಹಂಪಿಯ ನಿಗೂಢ ಕಥೆ Part {ep_num} #kannada #shorts #folklore",
-            "example_tags": ["ಕನ್ನಡ", "ಹಂಪಿ", "ವಿಜಯನಗರ", "ಕಥೆಗಳು", "shorts", "kannada stories", "mystery", "viral", "trending", "folklore"],
+            "example_title": f"ಬಾವಿಯೊಳಗಿನ ರಹಸ್ಯ ಏನು? 😱 {story['series_title']} Part {ep_num} #Shorts",
+            "example_desc": f"ಹಂಪಿಯ ನಿಗೂಢ ಬಾವಿಯ ರೋಚಕ ಕನ್ನಡ ಕಥೆ!\nPart {ep_num + 1} ಗಾಗಿ ಚಾನೆಲ್ ಸಬ್‌ಸ್ಕ್ರೈಬ್ ಮಾಡಿ 🔔\n#Shorts #viral #trending #youtubeshorts #kannadastories #folklore",
+            "example_tags": ["ಕನ್ನಡ ಕಥೆಗಳು", "ಹಂಪಿ", "ವಿಜಯನಗರ", "shorts", "viral video", "trending", "youtube shorts", "kannada stories", "moral stories", "folklore", "mythology", "kids story"],
         },
         "telugu": {
             "name": "Telugu",
             "script": "Telugu script తెలుగు",
-            "example_title": f"{story['series_title']} Part {ep_num} | #Shorts",
-            "example_desc": f"హంపీ రహస్య కథ Part {ep_num} #telugu #shorts #folklore",
-            "example_tags": ["తెలుగు", "హంపీ", "కథలు", "shorts", "telugu stories", "mystery", "viral", "trending", "folklore", "india"],
+            "example_title": f"బావిలో దాగిన రహస్యం ఏమిటి? 😱 {story['series_title']} Part {ep_num} #Shorts",
+            "example_desc": f"హంపీ రహస్య బావి వెనుక ఉత్కంఠభరిత తెలుగు కథ!\nPart {ep_num + 1} కోసం ఛానెల్ సబ్‌స్క్రైబ్ చేయండి 🔔\n#Shorts #viral #trending #youtubeshorts #telugustories #folklore",
+            "example_tags": ["తెలుగు కథలు", "హంపీ", "విజయనగరం", "shorts", "viral video", "trending", "youtube shorts", "telugu stories", "moral stories", "folklore", "mythology", "kids story"],
         },
         "hindi": {
             "name": "Hindi",
             "script": "Devanagari script हिन्दी",
-            "example_title": f"{story['series_title']} Part {ep_num} | #Shorts",
-            "example_desc": f"हम्पी की रहस्यमयी कहानी Part {ep_num} #hindi #shorts #kahani",
-            "example_tags": ["हिन्दी", "हम्पी", "कहानियां", "shorts", "hindi stories", "mystery", "viral", "trending", "folklore", "kahani"],
+            "example_title": f"कुएँ में छिपा राज़ क्या था? 😱 {story['series_title']} Part {ep_num} #Shorts",
+            "example_desc": f"हम्पी के रहस्यमयी कुएँ की रोमांचक हिंदी कहानी!\nPart {ep_num + 1} के लिए चैनल सब्सक्राइब करें 🔔\n#Shorts #viral #trending #youtubeshorts #hindikahani #folklore",
+            "example_tags": ["हिंदी कहानियां", "हम्पी", "विजयनगर", "shorts", "viral video", "trending", "youtube shorts", "hindi stories", "moral stories", "folklore", "mythology", "kids story"],
         },
     }
 
@@ -521,6 +540,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
 
     for lang_key, spec in lang_specs.items():
         print(f"[Gemini] Generating {spec['name']} narration and metadata...")
+        words = _narration_word_target(lang_key)
         call_prompt = f"""You are a master {spec['name']} storyteller and YouTube Shorts creator.
 
 STORY: {story['series_title']} - Part {ep_num} of {max_ep}
@@ -529,8 +549,11 @@ ENGLISH SCENE NARRATIONS:
 
 TASK:
 1. Translate and dramatically adapt each of the {NUM_SCENES} scenes into native {spec['name']} ({spec['script']}).
-   CRITICAL: EACH scene must be 1-2 short, punchy sentences of about 14-18 native words (never more than 20) — roughly a 9-11 second voiceover per scene. Keep it concise; do not pad.
-2. Provide a localized YouTube title (with Part {ep_num} and #Shorts), description (with 3-4 hashtags), and exactly 10 high-search regional tags.
+   CRITICAL: EACH scene must be ONE short, punchy sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words, never more) so the full video is about {int(TARGET_DURATION_SEC)} seconds. Keep it tight; do not pad or add filler.
+2. Write DISCOVERABLE {spec['name']} YouTube Shorts metadata, built so YouTube recommends it and it reaches new viewers:
+   - "title": A scroll-stopping curiosity-gap hook in {spec['name']} about THIS part's twist (make them NEED to tap), include the hero's name, then "Part {ep_num}" and "#Shorts". UNDER 90 characters, front-load the strongest search keyword, add exactly ONE fitting emoji.
+   - "description": Line 1 = a punchy one-line hook containing the main search keyword (YouTube ranks the first ~100 characters). Line 2 = invite viewers to watch Part {ep_num + 1} and subscribe for the series. Last line = 6 hashtags blending language + genre + broad trending (#Shorts #viral #trending #youtubeshorts plus 2 story-specific). Natural, never spammy.
+   - "tags": EXACTLY 12 high-search tags, NO '#', mixing native {spec['name']} and English: broad trending (shorts, viral video, trending, youtube shorts), genre (moral stories, folklore, mythology, panchatantra, kids story), language ("{spec['name']} stories"), and specifics (hero name, region).
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
 {{
@@ -546,7 +569,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
         resp = call_gemini_with_fallback(api_key, call_prompt)
         raw_json = resp.text.strip().removeprefix("```json").removesuffix("```").strip()
         try:
-            data = json.loads(raw_json)
+            data = json.loads(raw_json, strict=False)  # allow literal newlines in description
             meta = LocalizedMetadata.model_validate(data)
             localized_results[lang_key] = meta
         except Exception as e:
@@ -869,24 +892,30 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
 # =====================================================================
 def _get_indic_font(lang: str, size: int = 46) -> ImageFont.FreeTypeFont:
     """Locate appropriate Indic font on macOS or Linux."""
+    # Windows ships "Nirmala UI" (Nirmala.ttc) which covers Kannada, Telugu and
+    # Devanagari — used so local Windows runs render Indic text.
+    win_nirmala = ["C:/Windows/Fonts/Nirmala.ttc"]
     paths = {
         "kannada": [
             "/System/Library/Fonts/NotoSansKannada.ttc",
             "/System/Library/Fonts/Supplemental/Kannada Sangam MN.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansKannada-Bold.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf",
+            *win_nirmala,
         ],
         "telugu": [
             "/System/Library/Fonts/KohinoorTelugu.ttc",
             "/System/Library/Fonts/Supplemental/Telugu MN.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansTelugu-Bold.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf",
+            *win_nirmala,
         ],
         "hindi": [
             "/System/Library/Fonts/Kohinoor.ttc",
             "/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+            *win_nirmala,
         ],
     }
     for p in paths.get(lang, []):
