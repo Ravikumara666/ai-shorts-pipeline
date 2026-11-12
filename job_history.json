@@ -19,5 +19,26 @@
         "video_id": "fQafiHSDtMo"
       }
     }
+  },
+  "story_001_ep2": {
+    "story_id": "story_001",
+    "episode": 2,
+    "prompt_hash": "62206737fcb39a61912621d54b7ad236b2578e394c84c8a4aba26b2b5aca3f9d",
+    "status": "completed",
+    "manifest_path": "output_build/story_001_ep2/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "PJhHbqX2xv4"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "IivVKn7JNWk"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "zOd-_50_RdA"
+      }
+    }
   }
 }
