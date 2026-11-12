@@ -40,5 +40,26 @@
         "video_id": "zOd-_50_RdA"
       }
     }
+  },
+  "story_001_ep3": {
+    "story_id": "story_001",
+    "episode": 3,
+    "prompt_hash": "c1b9348ad58727dd86a6a701675b14fb17a64e39832b6f1cda01b529bf1bcaa7",
+    "status": "completed",
+    "manifest_path": "output_build/story_001_ep3/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "8RwWwXSUdes"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "go5m_tOkv-4"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "wVvtbpeK1nI"
+      }
+    }
   }
 }
