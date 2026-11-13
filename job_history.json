@@ -65,7 +65,7 @@
   "story_001_ep4": {
     "story_id": "story_001",
     "episode": 4,
-    "prompt_hash": "ed8a5a7d85e8065327adef54b07ac0adacd26d8f5323731c2134547cfbc756ac",
+    "prompt_hash": "bc261cba6a949fcf1b2412184ef071e4247809019ee5ac6e636d320736d7eeed",
     "status": "rendered",
     "manifest_path": "output_build/story_001_ep4/episode_manifest.json",
     "uploads": {
