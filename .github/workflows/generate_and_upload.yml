@@ -24,6 +24,15 @@ on:
         type: boolean
         required: false
         default: false
+      use_ai_video:
+        description: 'Animate key scenes into real motion clips (free HF I2V); off = Ken Burns only'
+        type: boolean
+        required: false
+        default: true
+      i2v_scene_indices:
+        description: 'Which scenes to animate (1-based): e.g. "1,4,8", "all", or "" to disable'
+        required: false
+        default: '1,4,8'
 
 permissions:
   contents: write
@@ -35,9 +44,9 @@ concurrency:
 jobs:
   generate-and-upload:
     runs-on: ubuntu-latest
-    # Pipeline needs ~15-18 min (install + 8 images + 3 renders + uploads);
-    # 40 leaves headroom so a slow runner/install never kills a mid-flight render.
-    timeout-minutes: 40
+    # Base pipeline needs ~15-18 min; free HF ZeroGPU I2V adds queue/generation time for the
+    # animated scenes, so allow 60 min so a slow Space never kills a mid-flight render.
+    timeout-minutes: 60
 
     steps:
       - name: 📥 Checkout repository
@@ -56,7 +65,7 @@ jobs:
 
       - name: ✅ Pre-flight repository quality gate
         run: |
-          python -m py_compile main_pipeline.py upload_to_youtube.py upload_to_meta.py auth_setup.py test_pipeline.py
+          python -m py_compile main_pipeline.py video_animator.py upload_to_youtube.py upload_to_meta.py auth_setup.py test_pipeline.py
           python - <<'PY'
           import json
           from pathlib import Path
@@ -95,6 +104,10 @@ jobs:
           # Override per-run via the manual input, or repo-wide via an Actions variable
           # named IMAGE_PROVIDER (Settings -> Secrets and variables -> Actions -> Variables).
           IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || vars.IMAGE_PROVIDER || 'free-first' }}
+          # Image-to-Video (free HF ZeroGPU). Toggle repo-wide via Actions variables
+          # USE_AI_VIDEO (true/false) and I2V_SCENE_INDICES ("1,4,8" | "all" | "").
+          USE_AI_VIDEO: ${{ github.event.inputs.use_ai_video || vars.USE_AI_VIDEO || 'true' }}
+          I2V_SCENE_INDICES: ${{ github.event.inputs.i2v_scene_indices || vars.I2V_SCENE_INDICES || '1,4,8' }}
         run: |
           if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             echo "🧪 Test mode: rendering only (no upload, no state changes)."
@@ -111,6 +124,7 @@ jobs:
           path: |
             output_build/**/final_*.mp4
             output_build/**/shared_images/*.jpg
+            output_build/**/shared_clips/*.mp4
           if-no-files-found: ignore
           retention-days: 7
 

@@ -48,6 +48,32 @@ PROVIDER_CHAINS: dict[str, list[str]] = {
     "free-first":   ["pollinations", "hf", "gemini"],
 }
 
+# --- Image-to-Video (I2V) animation of key scenes ---------------------------
+# When on, selected scenes are animated into real motion clips (free HF ZeroGPU,
+# via video_animator.py); any scene that can't animate falls back to Ken Burns.
+USE_AI_VIDEO = os.getenv("USE_AI_VIDEO", "true").strip().lower() in ("1", "true", "yes", "on")
+# 1-based scene numbers to animate. Default = Hook, Climax, Cliffhanger. "all" = every
+# scene; "" / "none" / "off" = disable (pure Ken Burns). Parsed against the real scene count.
+I2V_SCENE_INDICES = os.getenv("I2V_SCENE_INDICES", "1,4,8")
+
+
+def _parse_i2v_indices(raw: str, scene_count: int) -> set[int]:
+    """Parse the 1-based I2V_SCENE_INDICES env into a set of 0-based scene indices."""
+    raw = (raw or "").strip().lower()
+    if raw in ("", "none", "off", "false", "0"):
+        return set()
+    if raw == "all":
+        return set(range(scene_count))
+    out: set[int] = set()
+    for tok in raw.replace(";", ",").split(","):
+        tok = tok.strip()
+        if tok.isdigit():
+            k = int(tok) - 1  # 1-based -> 0-based
+            if 0 <= k < scene_count:
+                out.add(k)
+    return out
+
+
 # Acceptable final Short duration (seconds). YouTube Shorts allow up to 3 min
 # (180s), so a valid render is never discarded after minutes of compute.
 MIN_DURATION_SEC = float(os.getenv("MIN_DURATION_SEC", "30"))
@@ -222,6 +248,10 @@ class MultiLangEpisode(BaseModel):
             f"Exactly {NUM_SCENES} concise English visual prompts (UNDER 220 CHARACTERS EACH). "
             "Format: '3D Pixar Disney animation style, {short_character_desc}, {scene_action_setting}, vibrant cinematic lighting, 9:16 vertical'"
         )
+    )
+    motion_prompts: list[str] = Field(
+        default_factory=list,
+        description="Per-scene 3D motion directions for optional image-to-video animation",
     )
     kannada: LocalizedMetadata
     telugu: LocalizedMetadata
@@ -522,6 +552,9 @@ TASK:
      matching the on-screen moment (e.g. "tense and fearful", "soft and sad", "excited and joyful",
      "mysterious and suspenseful", "angry and forceful", "warm and calm"). Vary it scene to scene.
    - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
+   - `motion_3d_prompt`: ONE short sentence describing what MOVES and HOW in this shot, for an
+     image-to-video animator — e.g. "camera slowly pushes in as Putta leans over the glowing well,
+     water rippling and mist curling upward, his hair swaying". Focus on gentle, realistic motion.
 3. {finale_instruction}
 4. Provide a 2-sentence `episode_summary_for_next_part`.
 
@@ -535,7 +568,8 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
       "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:90]}, kneeling at the stone rim of an ancient well and peering down at glowing golden water, ruined Hampi temple at night in the background, eerie blue moonlight, 9:16 vertical",
       "english_narration": "Deep in the ruins of Hampi, young Putta heard an eerie whisper echoing from the well. The midnight waters began to glow with ancient gold.",
       "emotion": "tense and fearful",
-      "camera_movement_type": "push-in"
+      "camera_movement_type": "push-in",
+      "motion_3d_prompt": "camera slowly pushes in as Putta leans over the glowing well, water rippling and mist curling upward"
     }}
   ]
 }}"""
@@ -559,6 +593,13 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
     # Language-independent per-scene delivery emotions (drive expressive TTS for all 3 languages).
     scene_emotions = [
         str(s.get("emotion", "") or "calm, dramatic storytelling").strip()
+        for s in scenes
+    ]
+    # Language-independent per-scene motion directions (drive optional I2V animation).
+    motion_prompts = [
+        str(s.get("motion_3d_prompt", "")
+            or s.get("camera_movement_type", "")
+            or "gentle cinematic push-in").strip()
         for s in scenes
     ]
 
@@ -644,6 +685,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
     episode = MultiLangEpisode(
         episode_summary_for_next_part=call1_data.get("episode_summary_for_next_part", ""),
         visual_prompts_english=visual_prompts_english,
+        motion_prompts=motion_prompts,
         kannada=localized_results["kannada"],
         telugu=localized_results["telugu"],
         hindi=localized_results["hindi"],
@@ -977,6 +1019,50 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
     return image_paths
 
 
+def generate_shared_scene_videos(
+    image_paths: list[str], motion_prompts: list[str], output_dir: str
+) -> dict[int, str]:
+    """Animate the configured key scenes into shared I2V clips (language-independent).
+
+    The visual is identical across kn/te/hi, so each clip is generated ONCE here and later
+    retimed per language to the scene's narration length. Returns {scene_index: mp4_path} for
+    scenes that animated successfully; every other scene renders with Ken Burns. Never raises —
+    a failure (quota/timeout/Space down) just means fewer animated scenes this run.
+    """
+    if not USE_AI_VIDEO:
+        print("[VideoGen] USE_AI_VIDEO is off; all scenes use Ken Burns image motion.")
+        return {}
+    indices = _parse_i2v_indices(I2V_SCENE_INDICES, len(image_paths))
+    if not indices:
+        print("[VideoGen] No I2V scene indices configured; using Ken Burns for all scenes.")
+        return {}
+    try:
+        from video_animator import animate_scene_to_video
+    except Exception as e:
+        print(f"[VideoGen] ⚠️  video_animator unavailable ({e}); Ken Burns for all scenes.")
+        return {}
+
+    os.makedirs(output_dir, exist_ok=True)
+    clips: dict[int, str] = {}
+    for i in sorted(indices):
+        if i >= len(image_paths):
+            continue
+        clip_path = os.path.join(output_dir, f"clip_{i}.mp4")
+        if os.path.isfile(clip_path) and os.path.getsize(clip_path) > 50_000:
+            print(f"[VideoGen] Scene {i + 1}: cached animated clip exists, skipping.")
+            clips[i] = clip_path
+            continue
+        motion = motion_prompts[i] if i < len(motion_prompts) else ""
+        print(f"[VideoGen] 🎬 Animating Scene {i + 1} (I2V)...")
+        result = animate_scene_to_video(image_paths[i], motion, clip_path, duration_sec=5.0)
+        if result and os.path.isfile(result):
+            clips[i] = result
+
+    animated = ", ".join(str(i + 1) for i in sorted(clips)) or "none"
+    print(f"[VideoGen] Animated scenes: {animated} (remaining scenes use Ken Burns).")
+    return clips
+
+
 # =====================================================================
 # 6. PILLOW-BASED 100% VISIBLE SUBTITLE OVERLAY GENERATOR
 # =====================================================================
@@ -1279,6 +1365,7 @@ async def build_language_video(
     image_paths: list[str],
     work_dir: str,
     bgm_path: Optional[str] = None,
+    animated_clips: Optional[dict[int, str]] = None,
 ) -> str:
     """Render a 60-75s Short with dynamic camera animations, burned-in subtitles, and BGM."""
     cfg = LANGUAGE_CONFIG[lang_key]
@@ -1318,26 +1405,50 @@ async def build_language_video(
             create_subtitle_overlay_png(phrase, lang_key, overlay_path)
             overlay_paths.append(overlay_path)
 
-        # 4. Alternating dynamic camera movement (smooth push-in vs pull-out)
-        if i % 2 == 0:
-            # Even scenes: Smooth push-in zoom + horizontal motion
-            cam_expr = (
-                f"zoompan=z='min(zoom+0.002,1.35)':"
-                f"x='iw/2-(iw/zoom/2)+sin(on/25)*40':"
-                f"y='ih/2-(ih/zoom/2)':"
-                f"d={frames}:s=1080x1920:fps=30"
+        # 4. Scene visual source: a real AI motion clip (I2V) if one was produced for this
+        #    scene, otherwise the static image with alternating Ken Burns camera movement.
+        animated_clip = (animated_clips or {}).get(i)
+        use_clip = bool(animated_clip) and os.path.isfile(animated_clip or "")
+
+        if use_clip:
+            # Retime the ~5s clip to this language's exact scene length (audio + 0.4s pause)
+            # via setpts, then clone the last frame (tpad) so video always covers the audio.
+            try:
+                clip_dur = _measure_duration(animated_clip)
+            except Exception:
+                clip_dur = 0.0
+            factor = (total_seg_duration / clip_dur) if clip_dur > 0.1 else 1.0
+            factor = min(max(factor, 0.25), 4.0)  # guard against extreme slow-mo/speed-up
+            first_input_args = ["-i", os.path.abspath(animated_clip)]
+            first_filter = (
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,fps=30,"
+                f"setpts=PTS*{factor:.5f},tpad=stop_mode=clone:stop_duration=1.5[bg]"
             )
+            scene_src = "I2V"
         else:
-            # Odd scenes: Smooth pull-out zoom + vertical motion
-            cam_expr = (
-                f"zoompan=z='if(eq(on,1),1.35,max(1.0,zoom-0.002))':"
-                f"x='iw/2-(iw/zoom/2)':"
-                f"y='ih/2-(ih/zoom/2)+cos(on/25)*40':"
-                f"d={frames}:s=1080x1920:fps=30"
-            )
+            if i % 2 == 0:
+                # Even scenes: Smooth push-in zoom + horizontal motion
+                cam_expr = (
+                    f"zoompan=z='min(zoom+0.002,1.35)':"
+                    f"x='iw/2-(iw/zoom/2)+sin(on/25)*40':"
+                    f"y='ih/2-(ih/zoom/2)':"
+                    f"d={frames}:s=1080x1920:fps=30"
+                )
+            else:
+                # Odd scenes: Smooth pull-out zoom + vertical motion
+                cam_expr = (
+                    f"zoompan=z='if(eq(on,1),1.35,max(1.0,zoom-0.002))':"
+                    f"x='iw/2-(iw/zoom/2)':"
+                    f"y='ih/2-(ih/zoom/2)+cos(on/25)*40':"
+                    f"d={frames}:s=1080x1920:fps=30"
+                )
+            first_input_args = ["-loop", "1", "-i", os.path.abspath(img_path)]
+            first_filter = f"[0:v]scale=1080:1920,{cam_expr}[bg]"
+            scene_src = "KenBurns"
 
         fade_out_st = max(0.1, total_seg_duration - 0.3)
-        filters = [f"[0:v]scale=1080:1920,{cam_expr}[bg]"]
+        filters = [first_filter]
         current_label = "bg"
         for phrase_idx, (_phrase, start, end) in enumerate(phrase_timing):
             next_label = f"caption_{i}_{phrase_idx}"
@@ -1352,10 +1463,7 @@ async def build_language_video(
         )
         vf_filter = ";".join(filters)
 
-        ffmpeg_cmd = [
-            FFMPEG, "-y",
-            "-loop", "1", "-i", os.path.abspath(img_path),
-        ]
+        ffmpeg_cmd = [FFMPEG, "-y", *first_input_args]
         for overlay_path in overlay_paths:
             ffmpeg_cmd.extend(["-loop", "1", "-i", os.path.abspath(overlay_path)])
         ffmpeg_cmd.extend([
@@ -1372,7 +1480,8 @@ async def build_language_video(
         ])
         subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         segment_files.append(seg_path)
-        print(f"    ✅ Scene {i + 1}/{len(meta.narration_scenes)} rendered ({total_seg_duration:.2f}s, sub overlay applied)")
+        print(f"    ✅ Scene {i + 1}/{len(meta.narration_scenes)} rendered "
+              f"({total_seg_duration:.2f}s, source={scene_src}, sub overlay applied)")
 
     # 5. Concatenate all segments
     concat_list = os.path.join(lang_dir, "concat.txt")
@@ -1500,6 +1609,14 @@ async def main() -> None:
         os.path.join(work_dir, "shared_images"),
     )
 
+    # Step 3a: Animate the configured key scenes into real motion clips (I2V), shared across
+    # all three languages. Any scene that can't animate falls back to Ken Burns at render time.
+    animated_clips = generate_shared_scene_videos(
+        images,
+        episode_data.motion_prompts,
+        os.path.join(work_dir, "shared_clips"),
+    )
+
     # Step 3: Ensure background music track
     bgm_path = ensure_bgm_track()
 
@@ -1513,7 +1630,7 @@ async def main() -> None:
     video_paths: dict[str, str] = {}
     for lang_key, meta in lang_map.items():
         video_path = await build_language_video(
-            lang_key, meta, images, work_dir, bgm_path=bgm_path
+            lang_key, meta, images, work_dir, bgm_path=bgm_path, animated_clips=animated_clips
         )
         video_paths[lang_key] = video_path
 
