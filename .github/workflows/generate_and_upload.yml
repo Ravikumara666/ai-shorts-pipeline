@@ -25,10 +25,10 @@ on:
         required: false
         default: false
       use_ai_video:
-        description: 'Animate key scenes into real motion clips (free HF I2V); off = Ken Burns only'
+        description: 'Animate key scenes into real motion clips (HF I2V); off = Ken Burns only'
         type: boolean
         required: false
-        default: true
+        default: false
       i2v_scene_indices:
         description: 'Which scenes to animate (1-based): e.g. "1,4,8", "all", or "" to disable'
         required: false
@@ -106,7 +106,7 @@ jobs:
           IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || vars.IMAGE_PROVIDER || 'free-first' }}
           # Image-to-Video (free HF ZeroGPU). Toggle repo-wide via Actions variables
           # USE_AI_VIDEO (true/false) and I2V_SCENE_INDICES ("1,4,8" | "all" | "").
-          USE_AI_VIDEO: ${{ github.event.inputs.use_ai_video || vars.USE_AI_VIDEO || 'true' }}
+          USE_AI_VIDEO: ${{ github.event.inputs.use_ai_video || vars.USE_AI_VIDEO || 'false' }}
           I2V_SCENE_INDICES: ${{ github.event.inputs.i2v_scene_indices || vars.I2V_SCENE_INDICES || '1,4,8' }}
         run: |
           if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
@@ -129,10 +129,28 @@ jobs:
           retention-days: 7
 
       - name: 📝 Commit updated state & vault
+        # Skip on manual render-only runs: a pre-flight must never persist/push state.
+        if: ${{ github.event.inputs.skip_upload != 'true' }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add story_state.json story_bank.json job_history.json
-          git diff --cached --quiet || git commit -m "🔄 Auto-update story state & vault [skip ci]"
-          git push
+          if git diff --cached --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+          git commit -m "🔄 Auto-update story state & vault [skip ci]"
+          # GitHub occasionally 500s on push ("Internal Server Error"); retry with rebase so a
+          # transient hiccup never loses a real state advancement (which would re-run an episode).
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Pushed state on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; rebasing on latest main and retrying..."
+            git pull --rebase origin main || true
+            sleep $((attempt * 5))
+          done
+          echo "::error::Failed to push updated state after 5 attempts."
+          exit 1
