@@ -1,1 +1,57 @@
-{}
+{
+  "story_001_ep1": {
+    "story_id": "story_001",
+    "episode": 1,
+    "prompt_hash": "19f07ca0bd323016b813f39a51151443a0dca1706d4b73bf827c3222b16f4578",
+    "status": "completed",
+    "manifest_path": "output_build/story_001_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "xDGiwl6pgFg"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "1O97s6emiYA"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "yRoSsJSpVCs"
+      }
+    },
+    "meta_uploads": {
+      "kn": {
+        "facebook": {
+          "status": "published",
+          "post_id": "1122800943685131"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Binary upload failed (HTTP 400): None"
+        }
+      },
+      "te": {
+        "facebook": {
+          "status": "published",
+          "post_id": "958334323770578"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Binary upload failed (HTTP 400): None"
+        }
+      },
+      "hi": {
+        "facebook": {
+          "status": "published",
+          "post_id": "1457959709642069"
+        },
+        "instagram": {
+          "status": "published",
+          "post_id": "18137430322776955"
+        }
+      }
+    }
+  }
+}
