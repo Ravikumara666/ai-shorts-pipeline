@@ -33,9 +33,20 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 # Lower it for a cheap smoke test, e.g. NUM_SCENES=2.
 NUM_SCENES = int(os.getenv("NUM_SCENES", "8"))
 
-# Image backend: "auto" (Gemini -> Pollinations -> HF), "gemini", "pollinations",
-# or "hf" (free FLUX.1-schnell Space — use this for a $0 free-tier test run).
-IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "auto").lower()
+# Image backend. Each mode is an ordered provider chain tried until one succeeds:
+#   "free-first" (DEFAULT) -> Pollinations -> HF FLUX -> Gemini (paid, last resort) = ~$0 most runs
+#   "free"       -> Pollinations -> HF FLUX (never paid; fails the run if both free services are down)
+#   "auto"       -> Gemini -> Pollinations -> HF (legacy: paid first, best quality)
+#   "gemini" / "pollinations" / "hf" -> that single provider only
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "free-first").lower()
+PROVIDER_CHAINS: dict[str, list[str]] = {
+    "gemini":       ["gemini"],
+    "pollinations": ["pollinations"],
+    "hf":           ["hf"],
+    "auto":         ["gemini", "pollinations", "hf"],
+    "free":         ["pollinations", "hf"],
+    "free-first":   ["pollinations", "hf", "gemini"],
+}
 
 # Acceptable final Short duration (seconds). YouTube Shorts allow up to 3 min
 # (180s), so a valid render is never discarded after minutes of compute.
@@ -885,46 +896,58 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
             f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&seed={100 + idx}&nologo=true&model=turbo{key_query}",
         ]
 
-        print(f"[Visuals] Generating Scene {idx + 1}/{len(visual_prompts)} (provider={IMAGE_PROVIDER})...")
+        chain = PROVIDER_CHAINS.get(IMAGE_PROVIDER, PROVIDER_CHAINS["free-first"])
+        print(f"[Visuals] Generating Scene {idx + 1}/{len(visual_prompts)} "
+              f"(provider={IMAGE_PROVIDER}: {' -> '.join(chain)})...")
 
-        saved = False
+        def _try_gemini() -> bool:
+            # Google Nano Banana image models (same GEMINI_API_KEY) — PAID.
+            return _download_via_gemini_image(clean_prompt, img_path, seed=100 + idx)
 
-        # Primary: Google Nano Banana image models (same GEMINI_API_KEY).
-        if IMAGE_PROVIDER in ("auto", "gemini"):
-            saved = _download_via_gemini_image(clean_prompt, img_path, seed=100 + idx)
-
-        # Secondary: Pollinations — only if an API key is configured.
-        # The free unauthenticated endpoint now returns 402 Payment Required,
-        # so skip it entirely without a key instead of burning retries on 402.
-        if not saved and IMAGE_PROVIDER in ("auto", "pollinations") and pollinations_key:
+        def _try_pollinations() -> bool:
+            # Free, but the unauthenticated endpoint now returns 402; needs a (free) key.
+            if not pollinations_key:
+                print(f"[Visuals] Scene {idx + 1}: skipping Pollinations (no POLLINATIONS_API_KEY).")
+                return False
             for attempt in range(1, 4):
                 endpoint_url = endpoints[(attempt - 1) % len(endpoints)]
                 try:
-                    print(f"[Visuals] Pollinations fallback Scene {idx + 1} (attempt {attempt}/3)...")
+                    print(f"[Visuals] Pollinations Scene {idx + 1} (attempt {attempt}/3)...")
                     resp = requests.get(endpoint_url, headers=headers, timeout=90)
                     resp.raise_for_status()
                     if _validate_image_content(resp.content):
                         with open(img_path, "wb") as f:
                             f.write(resp.content)
                         print(f"[Visuals] ✅ Scene {idx + 1} saved ({len(resp.content) // 1024} KB via Pollinations)")
-                        saved = True
-                        break
-                    else:
-                        print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
+                        return True
+                    print(f"[Visuals] ⚠️  Attempt {attempt} returned invalid/undersized image ({len(resp.content)} bytes).")
                 except Exception as e:
                     wait = 5 * attempt
                     print(f"[Visuals] ⚠️  Attempt {attempt} failed: {e}. Retrying in {wait}s...")
                     time.sleep(wait)
+            return False
 
-        # Tertiary (or primary when IMAGE_PROVIDER=hf): free Hugging Face FLUX.1-schnell Space.
-        if not saved and IMAGE_PROVIDER in ("auto", "hf"):
-            saved = _download_via_hf_flux(clean_prompt, img_path, seed=100 + idx)
+        def _try_hf() -> bool:
+            # Free Hugging Face FLUX.1-schnell Space.
+            return _download_via_hf_flux(clean_prompt, img_path, seed=100 + idx)
+
+        provider_fns = {
+            "gemini": _try_gemini,
+            "pollinations": _try_pollinations,
+            "hf": _try_hf,
+        }
+
+        saved = False
+        for prov in chain:
+            if provider_fns[prov]():
+                saved = True
+                break
 
         if not saved:
             sys.exit(
-                f"[FATAL] Failed to generate image for Scene {idx + 1} across all providers. "
-                "Primary is Google Nano Banana (needs a valid GEMINI_API_KEY with image generation enabled); "
-                "optional fallbacks are POLLINATIONS_API_KEY and the HF FLUX Space (HF_TOKEN). "
+                f"[FATAL] Failed to generate image for Scene {idx + 1} via provider chain "
+                f"[{' -> '.join(chain)}]. Free providers need POLLINATIONS_API_KEY and/or HF_TOKEN; "
+                "paid Gemini needs a GEMINI_API_KEY with image generation enabled. "
                 "Never falling back to solid color."
             )
 

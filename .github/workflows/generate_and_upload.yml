@@ -16,9 +16,9 @@ on:
         required: false
         default: '8'
       image_provider:
-        description: 'Image backend: auto | gemini | pollinations | hf (hf = free)'
+        description: 'Image backend: free-first | free | auto | gemini | pollinations | hf'
         required: false
-        default: 'auto'
+        default: 'free-first'
       skip_upload:
         description: 'Render only — do not upload to YouTube or persist state'
         type: boolean
@@ -91,7 +91,10 @@ jobs:
           META_CREDENTIALS_JSON: ${{ secrets.META_CREDENTIALS_JSON }}
           # Manual-run overrides; scheduled runs fall back to the defaults.
           NUM_SCENES: ${{ github.event.inputs.num_scenes || '8' }}
-          IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || 'auto' }}
+          # Default to FREE images (Pollinations -> HF FLUX -> paid Gemini last resort).
+          # Override per-run via the manual input, or repo-wide via an Actions variable
+          # named IMAGE_PROVIDER (Settings -> Secrets and variables -> Actions -> Variables).
+          IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || vars.IMAGE_PROVIDER || 'free-first' }}
         run: |
           if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             echo "🧪 Test mode: rendering only (no upload, no state changes)."
