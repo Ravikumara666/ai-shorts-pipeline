@@ -59,6 +59,7 @@ story_bank.json (Auto-refilling Story Vault)
 yt-multi-lang-shorts/
 ├── main_pipeline.py          # Core orchestrator (Gemini + Images + TTS + FFmpeg + Vault)
 ├── upload_to_youtube.py      # Multi-channel YouTube Data API v3 uploader
+├── upload_to_meta.py         # Facebook + Instagram Reels publisher (resumable upload)
 ├── auth_setup.py             # One-time OAuth2 helper (generates tokens + GitHub base64)
 ├── story_bank.json           # 📚 Auto-refilling story vault with visual anchors & beats
 ├── story_state.json          # 🔄 Current story & episode tracker
@@ -127,8 +128,30 @@ python3 -m main_pipeline
    - `YT_TOKEN_KN`: Base64 string of `token_kn.json`
    - `YT_TOKEN_TE`: Base64 string of `token_te.json`
    - `YT_TOKEN_HI`: Base64 string of `token_hi.json`
+   - `META_CREDENTIALS_JSON` *(optional — enables Facebook + Instagram Reels)*: a single JSON string keyed by language code. See **Step 6** below.
 3. The cron schedule in `.github/workflows/generate_and_upload.yml` will automatically run at `03:30 UTC` (9:00 AM IST) and `12:30 UTC` (6:00 PM IST) daily.
 4. After each run, GitHub Actions commits the updated `story_state.json` and `story_bank.json` back to your repo automatically!
+
+### Step 6: Facebook + Instagram Reels Cross-Posting (Optional)
+Each regional Short is also published as a **Facebook Reel** and an **Instagram Reel** when Meta credentials are configured. Video bytes are streamed via Meta's resumable upload (`rupload.facebook.com`), so **no public video hosting is required**.
+
+1. In the Meta Developer App, generate a **permanent Page Access Token** for each Page, and note each `fb_page_id` and the linked `ig_user_id` (IG Business/Creator account).
+2. Add a GitHub Actions secret named `META_CREDENTIALS_JSON` containing one JSON string:
+   ```json
+   {
+     "kn": {"fb_page_id": "...", "ig_user_id": "...", "page_access_token": "..."},
+     "te": {"fb_page_id": "...", "ig_user_id": "...", "page_access_token": "..."},
+     "hi": {"fb_page_id": "...", "ig_user_id": "...", "page_access_token": "..."}
+   }
+   ```
+3. For **local testing**, you may instead drop a `META_CREDENTIALS.json` file (same shape) in the repo root — it is git-ignored. Test one channel with:
+   ```bash
+   python upload_to_meta.py output_build/<job>/final_kannada.mp4 --lang kn --title "..." --description "..." --tags a b c
+   ```
+
+Notes:
+- Meta publishing is **best-effort and non-blocking**: a Facebook or Instagram failure is recorded in `job_history.json` (`meta_uploads`) but never stops YouTube uploads or episode advancement. Re-runs skip anything already published.
+- If `META_CREDENTIALS_JSON` is absent, Meta publishing is silently skipped. Use `--skip-meta` to render + upload to YouTube only.
 
 ## ⚙️ Key Technical Highlights
 - **Character Visual Anchoring**: Guarantees visual consistency across scenes and episodes.

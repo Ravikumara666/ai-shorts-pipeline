@@ -8,6 +8,7 @@ __pycache__/
 # Secrets
 client_secret.json
 token_*.json
+META_CREDENTIALS.json
 
 # Build Artifacts
 output_build/

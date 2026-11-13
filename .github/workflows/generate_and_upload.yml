@@ -51,7 +51,7 @@ jobs:
 
       - name: ✅ Pre-flight repository quality gate
         run: |
-          python -m py_compile main_pipeline.py upload_to_youtube.py auth_setup.py test_pipeline.py
+          python -m py_compile main_pipeline.py upload_to_youtube.py upload_to_meta.py auth_setup.py test_pipeline.py
           python - <<'PY'
           import json
           from pathlib import Path
@@ -82,6 +82,8 @@ jobs:
           # Optional image fallbacks — pipeline runs without them (Gemini is primary).
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          # Facebook + Instagram Reels cross-posting (optional; skipped if unset).
+          META_CREDENTIALS_JSON: ${{ secrets.META_CREDENTIALS_JSON }}
           # Manual-run overrides; scheduled runs fall back to the defaults.
           NUM_SCENES: ${{ github.event.inputs.num_scenes || '8' }}
           IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || 'auto' }}

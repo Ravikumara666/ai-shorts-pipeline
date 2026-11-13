@@ -197,6 +197,9 @@ class LocalizedMetadata(BaseModel):
             "so each scene voiceover is roughly 9-11 seconds and the whole video stays well under 3 minutes."
         )
     )
+    # Language-independent per-scene delivery emotion (assigned from the English blueprint,
+    # not generated per language). Drives expressive TTS. Empty => neutral storytelling.
+    scene_emotions: list[str] = Field(default_factory=list)
 
 
 class MultiLangEpisode(BaseModel):
@@ -216,17 +219,43 @@ class MultiLangEpisode(BaseModel):
 
 LANGUAGE_CONFIG: dict[str, dict[str, str]] = {
     "kannada": {
-        "voice": os.getenv("KN_VOICE", "kn-IN-GaganNeural"),
+        "voice": os.getenv("KN_VOICE", "kn-IN-GaganNeural"),          # edge-tts fallback voice
+        "gemini_voice": os.getenv("KN_GEMINI_VOICE", "Charon"),       # Gemini 3.8 TTS prebuilt voice
         "lang_code": "kn",
     },
     "telugu": {
         "voice": os.getenv("TE_VOICE", "te-IN-MohanNeural"),
+        "gemini_voice": os.getenv("TE_GEMINI_VOICE", "Rasalgethi"),
         "lang_code": "te",
     },
     "hindi": {
         "voice": os.getenv("HI_VOICE", "hi-IN-MadhurNeural"),
+        "gemini_voice": os.getenv("HI_GEMINI_VOICE", "Algenib"),
         "lang_code": "hi",
     },
+}
+
+# Text-to-speech engine: "gemini" (natural, expressive Gemini 3.8 TTS) with automatic
+# edge-tts fallback, or "edge" to force the free Microsoft voices only.
+TTS_ENGINE = os.getenv("TTS_ENGINE", "gemini").strip().lower()
+GEMINI_TTS_MODELS = [
+    os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts"),
+    "gemini-3.8-flash-lite-tts",
+]
+GEMINI_TTS_MODELS = list(dict.fromkeys(GEMINI_TTS_MODELS))
+
+# Map a free-text scene emotion to crude edge-tts prosody (rate, pitch) for the fallback path.
+EDGE_EMOTION_PROSODY: dict[str, tuple[str, str]] = {
+    "fear":      ("-8%",  "-3Hz"),
+    "tense":     ("-6%",  "-2Hz"),
+    "suspense":  ("-10%", "-2Hz"),
+    "sad":       ("-12%", "-4Hz"),
+    "angry":     ("+6%",  "+3Hz"),
+    "excited":   ("+10%", "+6Hz"),
+    "joy":       ("+6%",  "+5Hz"),
+    "happy":     ("+6%",  "+5Hz"),
+    "calm":      ("-5%",  "+0Hz"),
+    "mysterious":("-8%",  "-2Hz"),
 }
 
 
@@ -470,6 +499,9 @@ TASK:
    - `scene_number`: 1 to {NUM_SCENES}
    - `story_action_visual_prompt`: Under 220 characters: "3D Pixar Disney animation style, {character_anchor[:60]}, <action/setting>, vibrant cinematic lighting, 9:16 vertical"
    - `english_narration`: 1-2 short, punchy sentences of about 14-18 words (never more than 20) advancing the mystery/drama.
+   - `emotion`: The dominant delivery emotion a voice actor should use for THIS scene, as 2-4 words
+     matching the on-screen moment (e.g. "tense and fearful", "soft and sad", "excited and joyful",
+     "mysterious and suspenseful", "angry and forceful", "warm and calm"). Vary it scene to scene.
    - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
 3. {finale_instruction}
 4. Provide a 2-sentence `episode_summary_for_next_part`.
@@ -483,6 +515,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
       "scene_number": 1,
       "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:55]}, staring into mysterious glowing well, vibrant cinematic lighting, 9:16 vertical",
       "english_narration": "Deep in the ruins of Hampi, young Putta heard an eerie whisper echoing from the well. The midnight waters began to glow with ancient gold.",
+      "emotion": "tense and fearful",
       "camera_movement_type": "push-in"
     }}
   ]
@@ -502,6 +535,11 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
 
     visual_prompts_english = [
         s.get("story_action_visual_prompt", s.get("visual_prompt", ""))
+        for s in scenes
+    ]
+    # Language-independent per-scene delivery emotions (drive expressive TTS for all 3 languages).
+    scene_emotions = [
+        str(s.get("emotion", "") or "calm, dramatic storytelling").strip()
         for s in scenes
     ]
 
@@ -541,14 +579,20 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
     for lang_key, spec in lang_specs.items():
         print(f"[Gemini] Generating {spec['name']} narration and metadata...")
         words = _narration_word_target(lang_key)
-        call_prompt = f"""You are a master {spec['name']} storyteller and YouTube Shorts creator.
+        call_prompt = f"""You are a popular {spec['name']} YouTube Shorts narrator who speaks the way real people talk today.
 
 STORY: {story['series_title']} - Part {ep_num} of {max_ep}
 ENGLISH SCENE NARRATIONS:
 {scenes_text}
 
 TASK:
-1. Translate and dramatically adapt each of the {NUM_SCENES} scenes into native {spec['name']} ({spec['script']}).
+1. Retell each of the {NUM_SCENES} scenes in natural, MODERN, everyday spoken {spec['name']} ({spec['script']}).
+   LANGUAGE RULES (very important):
+   - Use the simple, conversational, present-day spoken form of {spec['name']} that normal people use in daily life
+     (the colloquial / "bolchaal" style), NOT the old literary, classical, bookish or heavily Sanskritized form.
+   - ABSOLUTELY AVOID archaic, ancient, ceremonial, or textbook words. If a simpler common word exists, use it.
+   - Write it the way a friendly human narrator would actually SAY it out loud, with natural flow and rhythm.
+   - It must still sound clear and expressive, but easy for an ordinary modern listener to instantly understand.
    CRITICAL: EACH scene must be ONE short, punchy sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words, never more) so the full video is about {int(TARGET_DURATION_SEC)} seconds. Keep it tight; do not pad or add filler.
 2. Write DISCOVERABLE {spec['name']} YouTube Shorts metadata, built so YouTube recommends it and it reaches new viewers:
    - "title": A scroll-stopping curiosity-gap hook in {spec['name']} about THIS part's twist (make them NEED to tap), include the hero's name, then "Part {ep_num}" and "#Shorts". UNDER 90 characters, front-load the strongest search keyword, add exactly ONE fitting emoji.
@@ -571,6 +615,8 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
         try:
             data = json.loads(raw_json, strict=False)  # allow literal newlines in description
             meta = LocalizedMetadata.model_validate(data)
+            # Attach the language-independent per-scene emotions from the English blueprint.
+            meta.scene_emotions = list(scene_emotions)
             localized_results[lang_key] = meta
         except Exception as e:
             print(f"[Gemini] Error parsing {spec['name']} JSON: {e}\nRaw: {raw_json[:200]}")
@@ -1005,20 +1051,120 @@ def subtitle_phrases(text: str, duration: float, max_words: int = 7) -> list[tup
 # =====================================================================
 # 7. REGIONAL AUDIO SYNTHESIS & BACKGROUND MUSIC
 # =====================================================================
-async def synthesize_scene_audio(text: str, voice: str, out_mp3: str) -> float:
-    """Synthesize narration with edge-tts at natural dramatic pace (-5%)."""
-    communicate = edge_tts.Communicate(text, voice, rate="-5%")
-    await communicate.save(out_mp3)
-
+def _measure_duration(path: str) -> float:
     cmd = [
-        FFPROBE,
-        "-v", "error",
+        FFPROBE, "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
-        out_mp3,
+        path,
     ]
-    duration = float(subprocess.check_output(cmd).decode().strip())
-    print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s (dramatic pace)")
+    return float(subprocess.check_output(cmd).decode().strip())
+
+
+def _edge_prosody_for_emotion(emotion: str) -> tuple[str, str]:
+    """Map a free-text scene emotion to crude edge-tts (rate, pitch) for the fallback path."""
+    e = (emotion or "").lower()
+    for key, (rate, pitch) in EDGE_EMOTION_PROSODY.items():
+        if key in e:
+            return rate, pitch
+    return "-5%", "+0Hz"  # default dramatic pace (matches prior behaviour)
+
+
+def _gemini_tts_to_mp3(text: str, gemini_voice: str, emotion: str, out_mp3: str) -> None:
+    """Synthesize one scene with Gemini 3.8 TTS (natural, expressive, emotion-aware) and write mp3.
+
+    The emotion is injected as an inline angle-bracket performance cue, which the model PERFORMS
+    (adjusting delivery) without reading it aloud. Raises on any failure so the caller can fall back.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+
+    cue = (emotion or "").strip().strip("<>").strip()
+    contents = f"<{cue} voice> {text}" if cue else text
+
+    last_err: Exception | None = None
+    for model in GEMINI_TTS_MODELS:
+        client = None
+        try:
+            client = _new_gemini_client(api_key)
+            resp = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice)
+                        )
+                    ),
+                ),
+            )
+            part = resp.candidates[0].content.parts[0].inline_data
+            audio_bytes = part.data
+            mime = (part.mime_type or "").lower()
+            if not audio_bytes:
+                raise RuntimeError("Gemini TTS returned no audio bytes")
+
+            with tempfile.NamedTemporaryFile("wb", suffix=".audio", delete=False) as tf:
+                tf.write(audio_bytes)
+                raw_path = tf.name
+            try:
+                if "l16" in mime or "pcm" in mime:
+                    # Headerless 24kHz mono signed-16 PCM (older preview models).
+                    ff = [FFMPEG, "-y", "-f", "s16le", "-ar", "24000", "-ac", "1",
+                          "-i", raw_path, "-codec:a", "libmp3lame", "-q:a", "2", out_mp3]
+                else:
+                    # WAV (RIFF) container from the 3.8 TTS models.
+                    ff = [FFMPEG, "-y", "-i", raw_path,
+                          "-codec:a", "libmp3lame", "-q:a", "2", out_mp3]
+                subprocess.run(ff, check=True, capture_output=True)
+            finally:
+                try:
+                    os.remove(raw_path)
+                except OSError:
+                    pass
+            return
+        except Exception as exc:
+            last_err = exc
+            print(f"    [Gemini-TTS] {model} failed: {str(exc)[:140]}")
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+    raise RuntimeError(f"Gemini TTS failed for all models {GEMINI_TTS_MODELS}: {last_err}")
+
+
+async def synthesize_scene_audio(
+    text: str, out_mp3: str, *, lang_key: str, emotion: str = ""
+) -> float:
+    """Synthesize expressive scene narration.
+
+    Uses natural, emotion-aware Gemini 3.8 TTS when TTS_ENGINE=gemini (the default), and
+    automatically falls back to edge-tts (with emotion->prosody shaping) on any error or quota limit.
+    """
+    cfg = LANGUAGE_CONFIG[lang_key]
+    gemini_voice = cfg.get("gemini_voice", "Charon")
+    edge_voice = cfg["voice"]
+
+    used: str | None = None
+    if TTS_ENGINE == "gemini":
+        try:
+            await asyncio.to_thread(_gemini_tts_to_mp3, text, gemini_voice, emotion, out_mp3)
+            used = f"Gemini:{gemini_voice}"
+        except Exception as exc:
+            print(f"    [TTS] Gemini failed, falling back to edge-tts: {str(exc)[:120]}")
+
+    if used is None:
+        rate, pitch = _edge_prosody_for_emotion(emotion)
+        communicate = edge_tts.Communicate(text, edge_voice, rate=rate, pitch=pitch)
+        await communicate.save(out_mp3)
+        used = f"edge:{edge_voice}"
+
+    duration = _measure_duration(out_mp3)
+    print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s [{used}] ({emotion or 'neutral'})")
     return duration
 
 
@@ -1060,11 +1206,13 @@ async def build_language_video(
     bgm_path: Optional[str] = None,
 ) -> str:
     """Render a 60-75s Short with dynamic camera animations, burned-in subtitles, and BGM."""
-    voice = LANGUAGE_CONFIG[lang_key]["voice"]
+    cfg = LANGUAGE_CONFIG[lang_key]
+    narrator = cfg.get("gemini_voice", "Charon") if TTS_ENGINE == "gemini" else cfg["voice"]
     lang_dir = os.path.join(work_dir, lang_key)
     os.makedirs(lang_dir, exist_ok=True)
 
-    print(f"\n[{lang_key.upper()}] Building Short with voice {voice} ({len(meta.narration_scenes)} scenes)...")
+    print(f"\n[{lang_key.upper()}] Building Short with {TTS_ENGINE} voice '{narrator}' "
+          f"({len(meta.narration_scenes)} scenes)...")
 
     segment_files: list[str] = []
     total_running_time = 0.0
@@ -1076,8 +1224,11 @@ async def build_language_video(
         audio_path = os.path.join(lang_dir, f"audio_{i}.mp3")
         seg_path = os.path.join(lang_dir, f"seg_{i}.mp4")
 
-        # 1. Synthesize audio
-        duration = await synthesize_scene_audio(scene_text, voice, audio_path)
+        # 1. Synthesize audio (expressive, per-scene emotion-aware)
+        scene_emotion = meta.scene_emotions[i] if i < len(meta.scene_emotions) else ""
+        duration = await synthesize_scene_audio(
+            scene_text, audio_path, lang_key=lang_key, emotion=scene_emotion
+        )
 
         # 2. Add 0.4s natural breath pause between scenes
         total_seg_duration = duration + 0.40
@@ -1230,7 +1381,8 @@ async def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Multi-Language YouTube Shorts Pipeline")
-    parser.add_argument("--skip-upload", action="store_true", help="Render videos only; do not upload to YouTube")
+    parser.add_argument("--skip-upload", action="store_true", help="Render videos only; do not upload to YouTube or Meta")
+    parser.add_argument("--skip-meta", action="store_true", help="Upload to YouTube but skip Facebook/Instagram Reels")
     parser.add_argument("--dry-run", action="store_true", help="Run without persisting updated story state or vault")
     parser.add_argument("--episode", type=int, default=None, help="Force a specific episode number")
     parser.add_argument(
@@ -1318,6 +1470,12 @@ async def main() -> None:
     uploads = job.setdefault("uploads", {})
     for lang_code in ("kn", "te", "hi"):
         uploads.setdefault(lang_code, {"status": "pending", "video_id": None})
+    meta_uploads = job.setdefault("meta_uploads", {})
+    for lang_code in ("kn", "te", "hi"):
+        meta_uploads.setdefault(lang_code, {
+            "facebook": {"status": "pending", "post_id": None},
+            "instagram": {"status": "pending", "post_id": None},
+        })
     save_job_history(history)
     print(f"[Ledger] ✅ {job_key} recorded as rendered.")
 
@@ -1340,6 +1498,37 @@ async def main() -> None:
             )
     else:
         print("\n[Upload] ⏭️  Skipped upload as requested (--skip-upload).")
+
+    # Step 5b: Cross-post each Reel to Facebook + Instagram (best-effort).
+    # Meta publishing never gates episode advancement: a Meta failure must not
+    # block the YouTube-driven pipeline, and re-runs are idempotent via the ledger.
+    if not args.skip_upload and not args.skip_meta:
+        from upload_to_meta import publish_reel, build_caption, load_meta_credentials
+
+        meta_creds = load_meta_credentials()
+        if not meta_creds:
+            print("\n[Meta] ⏭️  No Meta credentials found "
+                  "(set META_CREDENTIALS_JSON). Skipping Facebook/Instagram.")
+        else:
+            for lang_key, vpath in video_paths.items():
+                lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
+                meta = lang_map[lang_key]
+                caption = build_caption(meta.title, meta.description, meta.tags)
+                print(f"\n[Meta] Cross-posting {lang_key.upper()} Reel to Facebook + Instagram...")
+                try:
+                    publish_reel(
+                        video_file=vpath,
+                        caption=caption,
+                        lang_code=lang_code,
+                        job_key=job_key,
+                        credentials=meta_creds,
+                    )
+                except Exception as exc:
+                    # publish_reel already isolates per-platform failures, but guard the
+                    # whole call so one language can never abort the others.
+                    print(f"[Meta] ⚠️  Unexpected error cross-posting {lang_key.upper()}: {exc}")
+    elif args.skip_meta:
+        print("\n[Meta] ⏭️  Skipped Facebook/Instagram publishing (--skip-meta).")
 
     # Step 6: Advance only after the durable ledger confirms every channel upload.
     history = load_job_history()
