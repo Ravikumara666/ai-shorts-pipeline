@@ -258,13 +258,19 @@ GEMINI_TTS_MODELS = list(dict.fromkeys(GEMINI_TTS_MODELS))
 # Map a free-text scene emotion to crude edge-tts prosody (rate, pitch) for the fallback path.
 EDGE_EMOTION_PROSODY: dict[str, tuple[str, str]] = {
     "fear":      ("-8%",  "-3Hz"),
+    "scared":    ("-8%",  "-3Hz"),
+    "nervous":   ("-6%",  "-2Hz"),
     "tense":     ("-6%",  "-2Hz"),
     "suspense":  ("-10%", "-2Hz"),
     "sad":       ("-12%", "-4Hz"),
     "angry":     ("+6%",  "+3Hz"),
+    "forceful":  ("+5%",  "+2Hz"),
     "excited":   ("+10%", "+6Hz"),
     "joy":       ("+6%",  "+5Hz"),
     "happy":     ("+6%",  "+5Hz"),
+    "warm":      ("-2%",  "+1Hz"),
+    "gentle":    ("-4%",  "+1Hz"),
+    "soft":      ("-6%",  "+0Hz"),
     "calm":      ("-5%",  "+0Hz"),
     "mysterious":("-8%",  "-2Hz"),
 }
@@ -337,8 +343,8 @@ def validate_episode_data(episode: MultiLangEpisode) -> None:
     if len(episode.visual_prompts_english) != NUM_SCENES:
         raise ValueError(f"Expected {NUM_SCENES} visual prompts; got {len(episode.visual_prompts_english)}.")
     for idx, prompt in enumerate(episode.visual_prompts_english, start=1):
-        if not prompt.strip() or len(prompt) > 240:
-            raise ValueError(f"Visual prompt {idx} is empty or exceeds 240 characters.")
+        if not prompt.strip() or len(prompt) > 340:
+            raise ValueError(f"Visual prompt {idx} is empty or exceeds 340 characters.")
 
     script_ranges = {
         "kannada": ("\u0c80", "\u0cff"),
@@ -508,7 +514,9 @@ TASK:
 2. Direct exactly {NUM_SCENES} progressive visual scenes in English.
    Each scene must have:
    - `scene_number`: 1 to {NUM_SCENES}
-   - `story_action_visual_prompt`: Under 220 characters: "3D Pixar Disney animation style, {character_anchor[:60]}, <action/setting>, vibrant cinematic lighting, 9:16 vertical"
+   - `story_action_visual_prompt`: Under 320 characters, written for a text-to-image model.
+     Structure it as: "3D Pixar Disney animation style, {character_anchor[:90]}, <who is doing WHAT, with the KEY OBJECT clearly visible>, <the specific setting/background>, <lighting/mood>, 9:16 vertical".
+     Name the ONE main subject and the exact action/object concretely (e.g. "holding a glowing golden key", "pointing at a cracked stone idol") so the image renders the right thing — avoid vague words like "magical scene". Keep the hero's look consistent with the character anchor in every scene.
    - `english_narration`: 1-2 short, punchy sentences of about 14-18 words (never more than 20) advancing the mystery/drama.
    - `emotion`: The dominant delivery emotion a voice actor should use for THIS scene, as 2-4 words
      matching the on-screen moment (e.g. "tense and fearful", "soft and sad", "excited and joyful",
@@ -524,7 +532,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
   "scenes": [
     {{
       "scene_number": 1,
-      "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:55]}, staring into mysterious glowing well, vibrant cinematic lighting, 9:16 vertical",
+      "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:90]}, kneeling at the stone rim of an ancient well and peering down at glowing golden water, ruined Hampi temple at night in the background, eerie blue moonlight, 9:16 vertical",
       "english_narration": "Deep in the ruins of Hampi, young Putta heard an eerie whisper echoing from the well. The midnight waters began to glow with ancient gold.",
       "emotion": "tense and fearful",
       "camera_movement_type": "push-in"
@@ -684,16 +692,28 @@ def _download_via_hf_flux(prompt: str, img_path: str, seed: int) -> bool:
     try:
         from gradio_client import Client
 
-        print("[Visuals] 🎨 Pollinations unavailable; trying Hugging Face FLUX.1-schnell...")
+        print("[Visuals] 🎨 Generating scene via Hugging Face FLUX.1-schnell (free)...")
         token = os.getenv("HF_TOKEN", "").strip() or None
+        # FLUX.1-schnell is a 4-step distilled model: unlike Gemini it does NOT infer
+        # production detail on its own, so enrich the director's prompt with explicit
+        # render-quality tokens. This is the single biggest lever on free-image quality —
+        # it yields sharper, more faithful characters and clearly-rendered objects.
+        styled = (
+            prompt.rstrip(" ,.")
+            + ", highly detailed 3D Pixar-style animated film still, expressive character faces,"
+            " correct anatomy, one clear focal subject, cinematic volumetric lighting,"
+            " rich vibrant colors, sharp focus, intricate detail, polished 8k render,"
+            " vertical 9:16 portrait composition"
+        )
         # gradio_client >=1.x renamed the auth kwarg from `hf_token` to `token`.
         client = Client("black-forest-labs/FLUX.1-schnell", token=token)
         result = client.predict(
-            prompt=prompt,
+            prompt=styled,
             seed=seed,
             randomize_seed=False,
             width=768,
-            height=1365,
+            # FLUX requires multiples of 16; 768x1344 ≈ 9:16 and is cover-cropped to 1080x1920.
+            height=1344,
             num_inference_steps=4,
             api_name="/infer",
         )
@@ -883,11 +903,12 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
                     continue
             Path(img_path).unlink(missing_ok=True)
 
-        # Keep prompt concise to prevent HTTP 414 / Cloudflare rejection
+        # Keep the FULL prompt for Gemini and HF (richer prompt = better images).
         clean_prompt = prompt.replace("\n", " ").strip()
-        if len(clean_prompt) > 240:
-            clean_prompt = clean_prompt[:235] + ", 9:16 vertical"
-        encoded = urllib.parse.quote(clean_prompt)
+        # Only Pollinations goes over a URL (HTTP 414 / Cloudflare risk), so truncate
+        # a copy for THAT path alone instead of starving every provider of detail.
+        poll_prompt = clean_prompt if len(clean_prompt) <= 240 else clean_prompt[:235] + ", 9:16 vertical"
+        encoded = urllib.parse.quote(poll_prompt)
 
         # Pollinations Flux first, then Turbo. No paid/obsolete provider fallback.
         key_query = f"&key={pollinations_key}" if pollinations_key else ""
@@ -1107,8 +1128,12 @@ def _gemini_tts_to_mp3(text: str, gemini_voice: str, emotion: str, out_mp3: str)
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
 
+    # Angle-bracket cue = PERFORMANCE direction the model acts on without reading aloud
+    # (verified). Keep it short and lead with the scene emotion, then reinforce a natural,
+    # modern, human storytelling delivery so the voice feels real — not a flat reader.
     cue = (emotion or "").strip().strip("<>").strip()
-    contents = f"<{cue} voice> {text}" if cue else text
+    style = f"{cue}, natural warm modern human storyteller voice" if cue else "natural warm modern human storyteller voice"
+    contents = f"<Speak in a {style}, with real emotion and conversational rhythm, not robotic> {text}"
     payload = {
         "contents": [{"parts": [{"text": contents}]}],
         "generationConfig": {
