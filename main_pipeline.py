@@ -1096,6 +1096,10 @@ def _edge_prosody_for_emotion(emotion: str) -> tuple[str, str]:
 def _gemini_tts_to_mp3(text: str, gemini_voice: str, emotion: str, out_mp3: str) -> None:
     """Synthesize one scene with Gemini 3.8 TTS (natural, expressive, emotion-aware) and write mp3.
 
+    Calls the Gemini REST API DIRECTLY (not the google-genai SDK) so the exact request payload is
+    version-independent: newer SDK releases serialize the TTS `speech_config` in a shape the API
+    rejects (HTTP 400 "Unknown name speechConfig"), which broke audio in CI. REST sidesteps that.
+
     The emotion is injected as an inline angle-bracket performance cue, which the model PERFORMS
     (adjusting delivery) without reading it aloud. Raises on any failure so the caller can fall back.
     """
@@ -1105,58 +1109,59 @@ def _gemini_tts_to_mp3(text: str, gemini_voice: str, emotion: str, out_mp3: str)
 
     cue = (emotion or "").strip().strip("<>").strip()
     contents = f"<{cue} voice> {text}" if cue else text
+    payload = {
+        "contents": [{"parts": [{"text": contents}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": gemini_voice}}},
+        },
+    }
 
-    last_err: Exception | None = None
+    last_err: object = None
     for model in GEMINI_TTS_MODELS:
-        client = None
-        try:
-            client = _new_gemini_client(api_key)
-            resp = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice)
-                        )
-                    ),
-                ),
-            )
-            part = resp.candidates[0].content.parts[0].inline_data
-            audio_bytes = part.data
-            mime = (part.mime_type or "").lower()
-            if not audio_bytes:
-                raise RuntimeError("Gemini TTS returned no audio bytes")
-
-            with tempfile.NamedTemporaryFile("wb", suffix=".audio", delete=False) as tf:
-                tf.write(audio_bytes)
-                raw_path = tf.name
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(1, 3):
             try:
-                if "l16" in mime or "pcm" in mime:
-                    # Headerless 24kHz mono signed-16 PCM (older preview models).
-                    ff = [FFMPEG, "-y", "-f", "s16le", "-ar", "24000", "-ac", "1",
-                          "-i", raw_path, "-codec:a", "libmp3lame", "-q:a", "2", out_mp3]
-                else:
-                    # WAV (RIFF) container from the 3.8 TTS models.
-                    ff = [FFMPEG, "-y", "-i", raw_path,
-                          "-codec:a", "libmp3lame", "-q:a", "2", out_mp3]
-                subprocess.run(ff, check=True, capture_output=True)
-            finally:
+                resp = requests.post(
+                    url,
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=120,
+                )
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last_err = f"HTTP {resp.status_code}"
+                    time.sleep(2 * attempt)
+                    continue
+                resp.raise_for_status()
+                inline = resp.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+                audio_bytes = base64.b64decode(inline["data"])
+                mime = (inline.get("mimeType") or "").lower()
+                if not audio_bytes:
+                    raise RuntimeError("Gemini TTS returned no audio bytes")
+
+                with tempfile.NamedTemporaryFile("wb", suffix=".audio", delete=False) as tf:
+                    tf.write(audio_bytes)
+                    raw_path = tf.name
                 try:
-                    os.remove(raw_path)
-                except OSError:
-                    pass
-            return
-        except Exception as exc:
-            last_err = exc
-            print(f"    [Gemini-TTS] {model} failed: {str(exc)[:140]}")
-        finally:
-            if client is not None:
-                try:
-                    client.close()
-                except Exception:
-                    pass
+                    if "l16" in mime or "pcm" in mime:
+                        # Headerless 24kHz mono signed-16 PCM (older preview models).
+                        ff = [FFMPEG, "-y", "-f", "s16le", "-ar", "24000", "-ac", "1",
+                              "-i", raw_path, "-codec:a", "libmp3lame", "-q:a", "2", out_mp3]
+                    else:
+                        # WAV (RIFF) container from the 3.8 TTS models.
+                        ff = [FFMPEG, "-y", "-i", raw_path,
+                              "-codec:a", "libmp3lame", "-q:a", "2", out_mp3]
+                    subprocess.run(ff, check=True, capture_output=True)
+                finally:
+                    try:
+                        os.remove(raw_path)
+                    except OSError:
+                        pass
+                return
+            except Exception as exc:
+                last_err = exc
+                print(f"    [Gemini-TTS] {model} attempt {attempt} failed: {str(exc)[:140]}")
+                time.sleep(1)
     raise RuntimeError(f"Gemini TTS failed for all models {GEMINI_TTS_MODELS}: {last_err}")
 
 
@@ -1181,10 +1186,32 @@ async def synthesize_scene_audio(
             print(f"    [TTS] Gemini failed, falling back to edge-tts: {str(exc)[:120]}")
 
     if used is None:
+        # edge-tts occasionally raises NoAudioReceived or writes an empty file in CI, which must
+        # NOT crash the whole run (all prior scenes/images are already done). Retry with backoff.
         rate, pitch = _edge_prosody_for_emotion(emotion)
-        communicate = edge_tts.Communicate(text, edge_voice, rate=rate, pitch=pitch)
-        await communicate.save(out_mp3)
-        used = f"edge:{edge_voice}"
+        last_edge_err: object = None
+        for attempt in range(1, 4):
+            try:
+                communicate = edge_tts.Communicate(text, edge_voice, rate=rate, pitch=pitch)
+                await communicate.save(out_mp3)
+                if os.path.isfile(out_mp3) and os.path.getsize(out_mp3) > 0:
+                    used = f"edge:{edge_voice}"
+                    break
+                last_edge_err = "empty output file"
+            except Exception as exc:
+                last_edge_err = exc
+                print(f"    [TTS] edge-tts attempt {attempt}/3 failed: {str(exc)[:120]}")
+            await asyncio.sleep(2 * attempt)
+        if used is None:
+            # Last resort: plain params (no rate/pitch) — maximally compatible.
+            try:
+                await edge_tts.Communicate(text, edge_voice).save(out_mp3)
+                if os.path.isfile(out_mp3) and os.path.getsize(out_mp3) > 0:
+                    used = f"edge:{edge_voice}(plain)"
+            except Exception as exc:
+                last_edge_err = exc
+        if used is None:
+            raise RuntimeError(f"All TTS engines failed for this scene (last edge error: {last_edge_err})")
 
     duration = _measure_duration(out_mp3)
     print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s [{used}] ({emotion or 'neutral'})")
