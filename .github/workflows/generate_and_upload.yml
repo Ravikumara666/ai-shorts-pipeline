@@ -2,8 +2,13 @@ name: 🎬 Generate & Upload Multi-Language Shorts
 
 on:
   schedule:
-    # 03:30 UTC = 09:00 IST, 12:30 UTC = 18:00 IST
-    - cron: '30 3,12 * * *'
+    # 04:00 UTC = 09:30 IST, 13:00 UTC = 18:30 IST (6:30 PM) — runs twice daily.
+    # NOTE: GitHub runs cron on a BEST-EFFORT basis and often delays scheduled jobs
+    # (minutes to a few hours), especially at round times when the shared free queue
+    # is congested — exact timing is NOT guaranteed. To reduce drift, change the
+    # minute to an odd value, e.g. '7 4,13 * * *' (09:37 / 18:37 IST). For exact
+    # timing, trigger via an external scheduler hitting the workflow_dispatch API.
+    - cron: '0 4,13 * * *'
   workflow_dispatch:
     inputs:
       num_scenes:
