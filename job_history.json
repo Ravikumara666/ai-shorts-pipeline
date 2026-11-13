@@ -1,1 +1,55 @@
-{}
+{
+  "story_001_ep1": {
+    "story_id": "story_001",
+    "episode": 1,
+    "prompt_hash": "a2d7e70c2a9f4eb8edf34e511e58ae195b94e3aed61ae1cd76db6adc204cc23e",
+    "status": "rendered",
+    "manifest_path": "output_build/story_001_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "pending",
+        "video_id": null
+      },
+      "te": {
+        "status": "pending",
+        "video_id": null
+      },
+      "hi": {
+        "status": "pending",
+        "video_id": null
+      }
+    },
+    "meta_uploads": {
+      "kn": {
+        "facebook": {
+          "status": "pending",
+          "post_id": null
+        },
+        "instagram": {
+          "status": "pending",
+          "post_id": null
+        }
+      },
+      "te": {
+        "facebook": {
+          "status": "pending",
+          "post_id": null
+        },
+        "instagram": {
+          "status": "pending",
+          "post_id": null
+        }
+      },
+      "hi": {
+        "facebook": {
+          "status": "pending",
+          "post_id": null
+        },
+        "instagram": {
+          "status": "pending",
+          "post_id": null
+        }
+      }
+    }
+  }
+}
