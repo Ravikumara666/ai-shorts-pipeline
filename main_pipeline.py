@@ -749,7 +749,8 @@ def _download_via_cloudflare(prompt: str, img_path: str, seed: int) -> bool:
         return False
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_IMAGE_MODEL}"
     headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
-    payload = {"prompt": prompt, "steps": 6, "seed": seed}
+    # flux-1-schnell accepts only {prompt, steps(1-8)}; extra fields (e.g. seed) -> HTTP 400.
+    payload = {"prompt": prompt[:2000], "steps": 6}
     for attempt in range(1, 3):
         try:
             print(f"[Visuals] 🎨 Generating scene via Cloudflare FLUX (attempt {attempt}/2)...")
@@ -757,6 +758,9 @@ def _download_via_cloudflare(prompt: str, img_path: str, seed: int) -> bool:
             if resp.status_code == 429:
                 print("[Visuals] ⚠️  Cloudflare daily neuron quota reached (429); falling through.")
                 return False
+            if not resp.ok:
+                # Surface Cloudflare's real reason (its 400 body says exactly what's wrong).
+                print(f"[Visuals] ⚠️  Cloudflare HTTP {resp.status_code}: {resp.text[:240]}")
             resp.raise_for_status()
             image_bytes: Optional[bytes] = None
             if "application/json" in resp.headers.get("Content-Type", "").lower():
