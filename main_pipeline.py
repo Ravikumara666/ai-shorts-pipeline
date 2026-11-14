@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import re
 import base64
 import asyncio
 import hashlib
@@ -181,6 +182,46 @@ def _new_gemini_client(api_key: str) -> genai.Client:
             clientArgs={"limits": httpx.Limits(max_connections=1, max_keepalive_connections=0)},
         ),
     )
+
+
+# Typographic/"smart" quotes a model sometimes emits as JSON structural delimiters,
+# which break json.loads with "Expecting value". Mapped to straight ASCII equivalents
+# ONLY in the repair fallback (never on content that already parses).
+_SMART_QUOTES = {
+    "“": '"', "”": '"', "„": '"', "‟": '"', "«": '"', "»": '"',
+    "‘": "'", "’": "'", "′": "'", "″": '"',
+}
+
+
+def _extract_json(text: str) -> str:
+    """Strip code fences and slice to the outermost {...} object."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z0-9]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+    start, end = t.find("{"), t.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        t = t[start:end + 1]
+    return t.strip()
+
+
+def _loads_lenient(raw: str):
+    """Parse model JSON tolerantly. Tries strict first (no change to good output); on failure,
+    repairs the common model mistakes (smart quotes used as delimiters, trailing commas,
+    stray control chars) and retries. Keeps the whole hands-off pipeline from crashing on a
+    single malformed response."""
+    cleaned = _extract_json(raw)
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        repaired = cleaned
+        for bad, good in _SMART_QUOTES.items():
+            repaired = repaired.replace(bad, good)
+        # Drop ASCII control chars except tab/newline/carriage-return.
+        repaired = "".join(ch for ch in repaired if ch >= " " or ch in "\t\n\r")
+        # Remove trailing commas before } or ].
+        repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+        return json.loads(repaired, strict=False)
 
 
 def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict] = None):
@@ -521,8 +562,7 @@ OUTPUT RAW JSON ONLY:
 
     print(f"[Vault Refill] Generating {count} new stories with Gemini...")
     response = call_gemini_with_fallback(api_key, contents=prompt)
-    clean_json = response.text.strip().removeprefix("```json").removesuffix("```").strip()
-    refill = StoryVaultRefill.model_validate_json(clean_json)
+    refill = StoryVaultRefill.model_validate(_loads_lenient(response.text))
     new_entries = [entry.model_dump() for entry in refill.new_stories]
     updated_bank = existing_bank + new_entries
     _atomic_json_write(STORY_BANK_PATH, updated_bank)
@@ -579,7 +619,7 @@ TASK:
 3. `hook_banner_text`: a punchy 3-to-5 WORD English curiosity headline capturing the stakes of Scene 1 (for on-screen display to muted scrollers; it will be translated per language later).
 4. End the FINAL scene with the moral + the debate question (step 2). Do NOT add "wait for Part N".
 
-OUTPUT RAW JSON ONLY (No markdown codeblocks):
+OUTPUT RAW JSON ONLY (No markdown codeblocks). Use ONLY straight ASCII double quotes (") for JSON — never curly/smart quotes (" " ' '):
 {{
   "winning_hook": "...",
   "hook_banner_text": "The Well That Spoke Back",
@@ -596,9 +636,9 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
 }}"""
 
     resp1 = call_gemini_with_fallback(api_key, call1_prompt)
-    raw1 = resp1.text.strip().removeprefix("```json").removesuffix("```").strip()
+    raw1 = resp1.text
     try:
-        call1_data = json.loads(raw1, strict=False)
+        call1_data = _loads_lenient(raw1)
     except Exception as e:
         print(f"[Gemini] Error parsing Call 1 JSON: {e}\nRaw: {raw1[:300]}")
         raise
@@ -692,7 +732,7 @@ TASK:
    - "description": Line 1 = a punchy one-line hook containing the main search keyword (YouTube ranks the first ~100 characters). Keep it to 1-2 sentences, natural, no hashtags (hashtags are added automatically). Do NOT mention any "Part" or "next episode".
    - "tags": EXACTLY 12 high-search tags, NO '#', mixing native {spec['name']} and English: broad trending (shorts, viral video, trending, youtube shorts), genre (moral stories, folklore, mythology, panchatantra, kids story), language ("{spec['name']} stories"), and specifics (hero name, theme, region).
 
-OUTPUT RAW JSON ONLY (No markdown codeblocks):
+OUTPUT RAW JSON ONLY (No markdown codeblocks). Use ONLY straight ASCII double quotes (") for JSON — never curly/smart quotes (" " ' '):
 {{
   "title": "{spec['example_title']}",
   "description": "{spec['example_desc']}",
@@ -706,9 +746,9 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
 }}"""
 
         resp = call_gemini_with_fallback(api_key, call_prompt)
-        raw_json = resp.text.strip().removeprefix("```json").removesuffix("```").strip()
+        raw_json = resp.text
         try:
-            data = json.loads(raw_json, strict=False)  # allow literal newlines in description
+            data = _loads_lenient(raw_json)  # tolerant: fixes smart quotes / trailing commas
             meta = LocalizedMetadata.model_validate(data)
             # Attach the language-independent per-scene emotions from the English blueprint.
             meta.scene_emotions = list(scene_emotions)
