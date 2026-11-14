@@ -1,1 +1,58 @@
-{}
+{
+  "story_001_ep1": {
+    "story_id": "story_001",
+    "episode": 1,
+    "prompt_hash": "5ac82c3375b917fc113de4a4a31ac51b72c15df40be21a779bb27b7336088b79",
+    "status": "completed",
+    "manifest_path": "output_build/story_001_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "5jtgvh7LN7o"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "nSSvlHWWq4c"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "T3XAGFsL9mY"
+      }
+    },
+    "meta_uploads": {
+      "kn": {
+        "facebook": {
+          "status": "published",
+          "post_id": "2431543920712897"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Binary upload failed (HTTP 400): {'debug_info': {'retriable': False, 'type': 'ProcessingFailedError', 'message': 'Request processing failed'}}"
+        }
+      },
+      "te": {
+        "facebook": {
+          "status": "published",
+          "post_id": "1181816364503834"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Binary upload failed (HTTP 400): {'debug_info': {'retriable': False, 'type': 'ProcessingFailedError', 'message': 'Request processing failed'}}"
+        }
+      },
+      "hi": {
+        "facebook": {
+          "status": "published",
+          "post_id": "1156270737300504"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Binary upload failed (HTTP 400): {'debug_info': {'retriable': False, 'type': 'ProcessingFailedError', 'message': 'Request processing failed'}}"
+        }
+      }
+    }
+  }
+}
