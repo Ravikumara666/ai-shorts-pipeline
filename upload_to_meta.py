@@ -191,6 +191,10 @@ def _json_or_raise(resp: requests.Response, context: str) -> dict:
         data = {"_raw": resp.text}
     if not resp.ok or (isinstance(data, dict) and data.get("error")):
         err = data.get("error") if isinstance(data, dict) else data
+        # Fall back to the full body when there's no explicit "error" field, so a 400 with an
+        # odd payload is debuggable instead of printing a useless "None".
+        if err is None:
+            err = data if data else (resp.text[:300] or "<empty body>")
         raise RuntimeError(f"{context} failed (HTTP {resp.status_code}): {err}")
     return data
 
@@ -204,8 +208,12 @@ def _upload_binary(upload_url: str, token: str, video_file: str) -> None:
         "file_size": str(file_size),
         "Content-Type": "application/octet-stream",
     }
+    # Read the whole file into memory (Reels are only a few MB) rather than passing an open
+    # file handle: _request_with_retry re-issues the POST on a transient 429/5xx, and a handle
+    # left at EOF from the first attempt would re-upload 0 bytes -> HTTP 400 (the IG kn/te bug).
     with open(video_file, "rb") as fh:
-        resp = _request_with_retry("POST", upload_url, headers=headers, data=fh)
+        payload = fh.read()
+    resp = _request_with_retry("POST", upload_url, headers=headers, data=payload)
     data = _json_or_raise(resp, "Binary upload")
     # FB returns {"success": true}; IG returns {"success": true} as well.
     if isinstance(data, dict) and data.get("success") is False:
