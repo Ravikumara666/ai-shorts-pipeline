@@ -32,7 +32,7 @@ load_dotenv()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 # Scenes per episode = images generated per run (shared across all languages).
 # Lower it for a cheap smoke test, e.g. NUM_SCENES=2.
-NUM_SCENES = int(os.getenv("NUM_SCENES", "8"))
+NUM_SCENES = int(os.getenv("NUM_SCENES", "10"))
 
 # Image backend. Each mode is an ordered provider chain tried until one succeeds:
 #   "cf-first" (DEFAULT) -> Cloudflare FLUX (free, ~57 img/day) -> Gemini (paid safety net) = ~$0 most runs
@@ -94,8 +94,10 @@ MAX_DURATION_SEC = float(os.getenv("MAX_DURATION_SEC", "180"))
 # Target final Short length (seconds). The per-language narration word budget is
 # derived from this and each voice's approx speaking rate, so Kannada/Telugu/Hindi
 # all land near the same length despite speaking at different speeds. One knob.
-# High-retention short-form target: 42-48s (tight, complete story with no dead air).
-TARGET_DURATION_SEC = float(os.getenv("TARGET_DURATION_SEC", "45"))
+# Target ~70s (60-80s band): long enough for a COMPLETE story (setup -> middle -> twist ->
+# resolution) without feeling cut, while staying inside the Shorts/Reels short-form window
+# (YT Shorts <=180s, IG/FB Reels <=90s). No dead air, but a real beginning and middle.
+TARGET_DURATION_SEC = float(os.getenv("TARGET_DURATION_SEC", "70"))
 
 # Inter-scene breath gap (seconds). Kept tiny so transitions are snappy and there is
 # effectively zero dead air between scenes (retention killer on Shorts/Reels).
@@ -116,7 +118,7 @@ _LANG_SEC_PER_WORD = {"kannada": 0.59, "telugu": 0.58, "hindi": 0.64}
 
 def _narration_word_target(lang_key: str) -> int:
     """Words per scene to land ~TARGET_DURATION_SEC total at the current scene count."""
-    per_scene_audio = max(2.5, (TARGET_DURATION_SEC / max(1, NUM_SCENES)) - 0.4)
+    per_scene_audio = max(2.5, (TARGET_DURATION_SEC / max(1, NUM_SCENES)) - SCENE_GAP_SEC)
     words = round(per_scene_audio / _LANG_SEC_PER_WORD.get(lang_key, 0.5))
     return max(6, min(24, words))
 
@@ -287,7 +289,7 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict
 
 
 # =====================================================================
-# 1. STRUCTURED OUTPUT SCHEMA (8 SCENES FOR 65-75s RUNTIME)
+# 1. STRUCTURED OUTPUT SCHEMA (10 SCENES FOR ~60-80s COMPLETE STORY)
 # =====================================================================
 class LocalizedMetadata(BaseModel):
     title: str = Field(description="Native-script curiosity-gap hook title (no 'Part'), max 90 chars")
@@ -295,9 +297,9 @@ class LocalizedMetadata(BaseModel):
     tags: list[str] = Field(description="12 high-search SEO tags: trending + genre + niche mix (no '#')")
     narration_scenes: list[str] = Field(
         description=(
-            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each is ONE short, punchy "
-            "sentence; the final scene ends with a 1-sentence debate question. The whole story runs "
-            "~42-48 seconds."
+            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each is ONE clear flowing "
+            "sentence advancing one story beat; the final scene ends with a 1-sentence debate question. "
+            "The whole story runs ~60-80 seconds."
         )
     )
     # Short native-script curiosity headline (3-5 words) burned on-screen for the first few
@@ -570,7 +572,7 @@ OUTPUT RAW JSON ONLY:
 
 
 # =====================================================================
-# 4. GENERATE 65-75s MULTI-LANGUAGE EPISODE WITH GEMINI (2 FAST CALLS)
+# 4. GENERATE ~60-80s MULTI-LANGUAGE EPISODE WITH GEMINI (2 FAST CALLS)
 # =====================================================================
 def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -594,24 +596,30 @@ STORY DETAILS:
 CHARACTER ANCHOR:
 {character_anchor}
 
-PACING (high-retention short-form — this is critical):
-- The whole narration must be designed for a {int(TARGET_DURATION_SEC)}-second video (~42-48s): {NUM_SCENES} FAST scenes, each ~4.5-5.5 seconds.
-- Keep every narration line tight and punchy. Total narration across all scenes should be roughly 95-115 words — no filler, every line advances the story.
+PACING (a COMPLETE story that is easy to follow — this is critical):
+- Design the narration for a {int(TARGET_DURATION_SEC)}-second video (~60-80s): {NUM_SCENES} scenes, each ~6-7 seconds.
+- This must feel like a WHOLE story, not a summary. Give it a real beginning and middle — do NOT rush to the ending. The resolution and moral appear ONLY in the last 1-2 scenes.
+- Total narration roughly 120-150 words across all scenes; every line advances the story (no filler, no repetition).
+
+STORY ARC — spread the {NUM_SCENES} scenes across these beats IN ORDER (don't skip the setup):
+- Scenes 1-2  = HOOK + SETUP: the hook grabs attention AND establishes WHO the hero is, WHERE we are, and WHAT they want / what's at stake.
+- Scenes 3-4  = RISING ACTION: the problem/complication grows; show the hero trying and the tension building.
+- Scene {max(4, NUM_SCENES//2)} (midpoint) = THE TWIST / turning point: a dramatic surprise that re-hooks the viewer (prevents mid-video drop-off).
+- Scenes {max(5, NUM_SCENES//2 + 1)}-{NUM_SCENES - 1} = CONSEQUENCES + CLIMAX: the twist plays out and builds to the peak moment.
+- Scene {NUM_SCENES} = RESOLUTION: resolve the story, state the clear heartwarming MORAL, then end with a 1-sentence debate question.
 
 TASK:
-1. IN-MEDIA-RES 3-SECOND HOOK (Scene 1): Brainstorm 3 candidate hooks and pick the strongest, then write Scene 1 as that hook.
+1. IN-MEDIA-RES HOOK (Scene 1): Brainstorm 3 candidate hooks and pick the strongest, then write Scene 1 as that hook.
    - STRICTLY FORBIDDEN openings: "Once upon a time", "In a small village", "Long ago", "There was a", "One day" or any slow scene-setting.
-   - Scene 1 MUST start MID-CRISIS, with a bold riddle, or a shocking consequence inside the FIRST 12 WORDS, then immediately dive into the story. Assume the viewer knows nothing and has seen no previous video.
-2. Direct exactly {NUM_SCENES} scenes that tell the FULL story arc in order: hook (scene 1) -> rising
-   tension -> MID-VIDEO TWIST (scene 5) -> climax -> satisfying payoff + clear moral (final scene). The video
-   must feel COMPLETE on its own: NO "Part 2", NO cliffhanger, NO "subscribe to see what happens next".
-   - SCENE 5 is a deliberate PATTERN INTERRUPT: structure it as a dramatic turning point or an unexpected twist that re-hooks the viewer and prevents the ~22-second mid-video drop-off.
+   - Scene 1 MUST open on a bold moment, riddle, or intriguing consequence in the FIRST 12 WORDS — but it should still make clear WHO and WHERE so a brand-new viewer can follow. Scene 2 then grounds the setup fully.
+2. Direct exactly {NUM_SCENES} scenes following the STORY ARC above. The video must feel COMPLETE on its own:
+   NO "Part 2", NO cliffhanger, NO "subscribe to see what happens next".
    Each scene must have:
    - `scene_number`: 1 to {NUM_SCENES}
    - `story_action_visual_prompt`: Under 320 characters, written for a text-to-image model.
      Structure it as: "3D Pixar Disney animation style, {character_anchor[:90]}, <who is doing WHAT, with the KEY OBJECT clearly visible>, <the specific setting/background>, <lighting/mood>, 9:16 vertical".
      Name the ONE main subject and the exact action/object concretely (avoid vague words like "magical scene"). Keep the hero's look IDENTICAL to the character anchor in every scene.
-   - `english_narration`: ONE short, punchy sentence (~11-14 words) advancing the story. The FINAL scene delivers the moral payoff AND ends with a 1-sentence debate question that makes viewers want to comment their opinion.
+   - `english_narration`: ONE clear, flowing sentence (~12-15 words) advancing THIS beat only. The FINAL scene delivers the moral payoff AND ends with a 1-sentence debate question that makes viewers want to comment their opinion.
    - `emotion`: The dominant delivery emotion a voice actor should use for THIS scene, as 2-4 words
      (e.g. "tense and fearful", "soft and sad", "excited and joyful", "warm and calm"). Vary it scene to scene.
    - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
@@ -723,7 +731,7 @@ TASK:
    - ABSOLUTELY AVOID archaic, ancient, ceremonial, or textbook words. If a simpler common word exists, use it.
    - Write it the way a friendly human narrator would actually SAY it out loud, with natural flow and rhythm.
    - It must still sound clear and expressive, but easy for an ordinary modern listener to instantly understand.
-   CRITICAL: EACH scene must be ONE short, punchy sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words, never more) so the full video is about {int(TARGET_DURATION_SEC)} seconds (~42-48s). Keep it tight; do not pad or add filler.
+   CRITICAL: EACH scene must be ONE clear, flowing sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words) so the full video is about {int(TARGET_DURATION_SEC)} seconds (~60-80s). Tell the beat fully but do not pad or repeat.
    PAYOFF: The LAST scene must deliver the moral AND end with a 1-sentence debate question in {spec['name']} that makes viewers want to comment their opinion.
 2. "hook_banner_text": Translate/adapt this English curiosity headline into a punchy 3-to-5 WORD {spec['name']} ({spec['script']}) headline for on-screen display: "{hook_banner_en}". Keep it 3-5 words, bold and curiosity-driven.
 3. "comment_question": A short, provocative debate question in {spec['name']} ({spec['script']}) inviting viewers to comment their opinion about the story's moral/dilemma (can match the question you ended the narration with).
@@ -1596,7 +1604,7 @@ async def build_language_video(
     bgm_path: Optional[str] = None,
     animated_clips: Optional[dict[int, str]] = None,
 ) -> str:
-    """Render a tight ~42-48s Short: hook banner, dynamic camera, burned-in subtitles, BGM."""
+    """Render a ~60-80s complete-story Short: hook banner, dynamic camera, subtitles, BGM."""
     cfg = LANGUAGE_CONFIG[lang_key]
     narrator = cfg.get("gemini_voice", "Charon") if TTS_ENGINE == "gemini" else cfg["voice"]
     lang_dir = os.path.join(work_dir, lang_key)
@@ -1857,7 +1865,7 @@ async def main() -> None:
 
     print("=" * 60)
     print(f"🎬 [{story['category']}] {story['series_title']}")
-    print(f"   Complete standalone story (Target Duration: 65-75 seconds)")
+    print(f"   Complete standalone story (Target Duration: ~{int(TARGET_DURATION_SEC)}s, 60-80s band)")
     print(f"   Character: {story['character_visual_anchor'][:80]}...")
     if args.skip_upload:
         print("   Upload: SKIPPED (--skip-upload)")
@@ -1865,7 +1873,7 @@ async def main() -> None:
         print("   State Persistence: DISABLED (--dry-run)")
     print("=" * 60)
 
-    # Step 1: Generate 8-scene 65-75s content with Gemini
+    # Step 1: Generate 10-scene ~60-80s content with Gemini
     episode_data = generate_episode_data(state, story)
 
     # Step 2: Generate only inside this episode's immutable namespace.
