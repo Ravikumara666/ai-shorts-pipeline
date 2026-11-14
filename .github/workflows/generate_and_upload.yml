@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       num_scenes:
-        description: 'Scenes per episode (lower = cheaper, e.g. 2 for a smoke test)'
+        description: 'Scenes per episode (10 = full ~70s story; lower = cheaper, e.g. 2 for a smoke test)'
         required: false
-        default: '8'
+        default: '10'
       image_provider:
         description: 'Image backend: cf-first | free | auto | cloudflare | gemini | pollinations | hf'
         required: false
@@ -106,7 +106,7 @@ jobs:
           # Facebook + Instagram Reels cross-posting (optional; skipped if unset).
           META_CREDENTIALS_JSON: ${{ secrets.META_CREDENTIALS_JSON }}
           # Manual-run overrides; scheduled runs fall back to the defaults.
-          NUM_SCENES: ${{ github.event.inputs.num_scenes || '8' }}
+          NUM_SCENES: ${{ github.event.inputs.num_scenes || '10' }}
           # Default to FREE images (Pollinations -> HF FLUX -> paid Gemini last resort).
           # Override per-run via the manual input, or repo-wide via an Actions variable
           # named IMAGE_PROVIDER (Settings -> Secrets and variables -> Actions -> Variables).
