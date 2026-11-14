@@ -238,6 +238,60 @@ def _upload_binary(
     return None
 
 
+# 6 targeted regional + niche hashtags per language for IG/FB Reels.
+META_HASHTAGS = {
+    "kn": ["#KannadaStories", "#NeethiKathegalu", "#KannadaReels", "#Panchatantra", "#MoralStories", "#Karnataka"],
+    "te": ["#TeluguStories", "#NeethiKathalu", "#TeluguReels", "#Panchatantra", "#MoralStories", "#Telugu"],
+    "hi": ["#HindiKahaniya", "#HindiReels", "#MoralStoriesHindi", "#Panchatantra", "#Kahani", "#DesiStories"],
+}
+
+# Native-language "share this" call to action (drives DM shares, which the algorithm rewards).
+META_SHARE_CTA = {
+    "kn": "ಈ ಕಥೆಯನ್ನು ಕೇಳಬೇಕಾದವರೊಂದಿಗೆ ಹಂಚಿಕೊಳ್ಳಿ 📩",
+    "te": "ఈ కథను వినాల్సిన వారితో షేర్ చేయండి 📩",
+    "hi": "यह कहानी उसके साथ शेयर करें जिसे इसे सुननी चाहिए 📩",
+}
+
+
+def _clean_line(text: str) -> str:
+    """First non-empty, hashtag-free line of a block (used as the teaser source)."""
+    import re as _re
+    for ln in (text or "").split("\n"):
+        ln = _re.sub(r"#\S+", "", ln).strip()
+        if ln:
+            return ln
+    return ""
+
+
+def build_reel_caption(
+    hook_banner_text: str,
+    comment_question: str,
+    title: str,
+    description: str,
+    lang_code: str,
+) -> str:
+    """Compose an IG/FB Reels caption optimized for the '...more' fold and DM shares:
+        Line 1: {hook_banner_text} — {comment_question}   (grabs attention before truncation)
+        <blank> story teaser + native share CTA
+        <blank> 6 targeted regional + niche hashtags
+    """
+    banner = (hook_banner_text or "").strip()
+    question = (comment_question or "").strip()
+    if banner and question:
+        line1 = f"{banner} — {question}"
+    else:
+        line1 = banner or question or _clean_line(title)
+
+    teaser = _clean_line(description) or _clean_line(title)
+    share_cta = META_SHARE_CTA.get(lang_code, META_SHARE_CTA["hi"])
+    teaser_block = "\n".join(p for p in (teaser, share_cta) if p)
+
+    hashtags = " ".join(META_HASHTAGS.get(lang_code, META_HASHTAGS["hi"]))
+
+    caption = "\n\n".join(p for p in (line1, teaser_block, hashtags) if p)
+    return caption[:MAX_CAPTION_CHARS]
+
+
 def build_caption(title: str, description: str, tags: list[str] | None = None) -> str:
     """Compose a Reels caption from the localized title/description, appending SEO
     tags as hashtags (deduped against text already present), within platform limits."""

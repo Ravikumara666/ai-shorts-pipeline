@@ -90,7 +90,21 @@ MAX_DURATION_SEC = float(os.getenv("MAX_DURATION_SEC", "180"))
 # Target final Short length (seconds). The per-language narration word budget is
 # derived from this and each voice's approx speaking rate, so Kannada/Telugu/Hindi
 # all land near the same length despite speaking at different speeds. One knob.
-TARGET_DURATION_SEC = float(os.getenv("TARGET_DURATION_SEC", "55"))
+# High-retention short-form target: 42-48s (tight, complete story with no dead air).
+TARGET_DURATION_SEC = float(os.getenv("TARGET_DURATION_SEC", "45"))
+
+# Inter-scene breath gap (seconds). Kept tiny so transitions are snappy and there is
+# effectively zero dead air between scenes (retention killer on Shorts/Reels).
+SCENE_GAP_SEC = float(os.getenv("SCENE_GAP_SEC", "0.12"))
+
+# On-screen curiosity hook banner (hook_banner_text) shown over scene 1 for muted
+# scrollers: from t=0 to this many seconds.
+HOOK_BANNER_SEC = float(os.getenv("HOOK_BANNER_SEC", "3.5"))
+
+# Base edge-tts speaking rate bump for a crisp, engaging storytelling cadence
+# (edge-tts is the fallback engine; Gemini TTS is primary). Per-scene emotion is
+# applied as a delta on top of this. Percent points.
+EDGE_BASE_RATE_PCT = int(os.getenv("EDGE_BASE_RATE_PCT", "10"))
 # Effective seconds per *requested* word, measured end-to-end (includes the model
 # tending to over-write, esp. Hindi) so all three languages land near the target.
 _LANG_SEC_PER_WORD = {"kannada": 0.59, "telugu": 0.58, "hindi": 0.64}
@@ -232,16 +246,21 @@ def call_gemini_with_fallback(api_key: str, contents: str, config: Optional[dict
 # 1. STRUCTURED OUTPUT SCHEMA (8 SCENES FOR 65-75s RUNTIME)
 # =====================================================================
 class LocalizedMetadata(BaseModel):
-    title: str = Field(description="YouTube title with Part X and #Shorts, max 100 chars")
-    description: str = Field(description="YouTube description with 3-4 hashtags and SEO keywords, max 5000 chars")
+    title: str = Field(description="Native-script curiosity-gap hook title (no 'Part'), max 90 chars")
+    description: str = Field(description="Native-script description: hook line + SEO keywords")
     tags: list[str] = Field(description="12 high-search SEO tags: trending + genre + niche mix (no '#')")
     narration_scenes: list[str] = Field(
         description=(
-            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each scene is "
-            "1 to 2 short, punchy storytelling sentences of about 14-18 words (never more than 20) "
-            "so each scene voiceover is roughly 9-11 seconds and the whole video stays well under 3 minutes."
+            f"Exactly {NUM_SCENES} voiceover narrations in native script. Each is ONE short, punchy "
+            "sentence; the final scene ends with a 1-sentence debate question. The whole story runs "
+            "~42-48 seconds."
         )
     )
+    # Short native-script curiosity headline (3-5 words) burned on-screen for the first few
+    # seconds so muted scrollers instantly see the stakes.
+    hook_banner_text: str = Field(default="", description="3-5 word native-script curiosity headline")
+    # Short native-language debate question for the caption / pinned comment (drives comments).
+    comment_question: str = Field(default="", description="Short native-language debate question")
     # Language-independent per-scene delivery emotion (assigned from the English blueprint,
     # not generated per language). Drives expressive TTS. Empty => neutral storytelling.
     scene_emotions: list[str] = Field(default_factory=list)
@@ -532,34 +551,40 @@ STORY DETAILS:
 CHARACTER ANCHOR:
 {character_anchor}
 
+PACING (high-retention short-form — this is critical):
+- The whole narration must be designed for a {int(TARGET_DURATION_SEC)}-second video (~42-48s): {NUM_SCENES} FAST scenes, each ~4.5-5.5 seconds.
+- Keep every narration line tight and punchy. Total narration across all scenes should be roughly 95-115 words — no filler, every line advances the story.
+
 TASK:
-1. Brainstorm 3 candidate viral hooks for Scene 1 and pick the strongest. Scene 1 MUST grab a brand-NEW
-   viewer in the first 1-2 seconds (shocking, curious, or emotional) — assume they know nothing and have
-   seen no previous video.
+1. IN-MEDIA-RES 3-SECOND HOOK (Scene 1): Brainstorm 3 candidate hooks and pick the strongest, then write Scene 1 as that hook.
+   - STRICTLY FORBIDDEN openings: "Once upon a time", "In a small village", "Long ago", "There was a", "One day" or any slow scene-setting.
+   - Scene 1 MUST start MID-CRISIS, with a bold riddle, or a shocking consequence inside the FIRST 12 WORDS, then immediately dive into the story. Assume the viewer knows nothing and has seen no previous video.
 2. Direct exactly {NUM_SCENES} scenes that tell the FULL story arc in order: hook (scene 1) -> rising
-   tension -> climax -> a satisfying twist and a clear heartwarming MORAL in the final scene. The video
+   tension -> MID-VIDEO TWIST (scene 5) -> climax -> satisfying payoff + clear moral (final scene). The video
    must feel COMPLETE on its own: NO "Part 2", NO cliffhanger, NO "subscribe to see what happens next".
+   - SCENE 5 is a deliberate PATTERN INTERRUPT: structure it as a dramatic turning point or an unexpected twist that re-hooks the viewer and prevents the ~22-second mid-video drop-off.
    Each scene must have:
    - `scene_number`: 1 to {NUM_SCENES}
    - `story_action_visual_prompt`: Under 320 characters, written for a text-to-image model.
      Structure it as: "3D Pixar Disney animation style, {character_anchor[:90]}, <who is doing WHAT, with the KEY OBJECT clearly visible>, <the specific setting/background>, <lighting/mood>, 9:16 vertical".
      Name the ONE main subject and the exact action/object concretely (avoid vague words like "magical scene"). Keep the hero's look IDENTICAL to the character anchor in every scene.
-   - `english_narration`: 1-2 short, punchy sentences of about 14-18 words (never more than 20) advancing the story.
+   - `english_narration`: ONE short, punchy sentence (~11-14 words) advancing the story. The FINAL scene delivers the moral payoff AND ends with a 1-sentence debate question that makes viewers want to comment their opinion.
    - `emotion`: The dominant delivery emotion a voice actor should use for THIS scene, as 2-4 words
      (e.g. "tense and fearful", "soft and sad", "excited and joyful", "warm and calm"). Vary it scene to scene.
    - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
    - `motion_3d_prompt`: ONE short sentence of gentle, realistic motion for an image-to-video animator.
-3. End the FINAL scene by resolving the story with a clear, heartwarming moral, then a SOFT generic
-   call to action (e.g. "follow for a new story every day") — NEVER "wait for Part N".
+3. `hook_banner_text`: a punchy 3-to-5 WORD English curiosity headline capturing the stakes of Scene 1 (for on-screen display to muted scrollers; it will be translated per language later).
+4. End the FINAL scene with the moral + the debate question (step 2). Do NOT add "wait for Part N".
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
 {{
   "winning_hook": "...",
+  "hook_banner_text": "The Well That Spoke Back",
   "scenes": [
     {{
       "scene_number": 1,
       "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:90]}, kneeling at the stone rim of an ancient well and peering down at glowing golden water, ruined Hampi temple at night in the background, eerie blue moonlight, 9:16 vertical",
-      "english_narration": "A poor boy drops his last coin into a cursed well - and a voice answers back.",
+      "english_narration": "His last coin hits the water - and the cursed well answers back in his dead father's voice.",
       "emotion": "tense and fearful",
       "camera_movement_type": "push-in",
       "motion_3d_prompt": "camera slowly pushes in as the boy leans over the glowing well, water rippling and mist curling upward"
@@ -578,6 +603,9 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
     scenes = call1_data.get("scenes", [])
     if len(scenes) != NUM_SCENES:
         raise ValueError(f"Call 1 must return exactly {NUM_SCENES} scenes, got {len(scenes)}")
+
+    # English curiosity headline for the on-screen hook banner (translated per language in Call 2).
+    hook_banner_en = str(call1_data.get("hook_banner_text", "") or "").strip()
 
     visual_prompts_english = [
         s.get("story_action_visual_prompt", s.get("visual_prompt", ""))
@@ -607,22 +635,28 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
         "kannada": {
             "name": "Kannada",
             "script": "Kannada script ಕನ್ನಡ",
-            "example_title": "ಬಾವಿಯೊಳಗಿಂದ ಬಂದ ಧ್ವನಿ ಏನು ಹೇಳಿತು? 😱 ಕನ್ನಡ ನೀತಿ ಕಥೆ #Shorts",
-            "example_desc": "ಒಂದು ಬಡ ಹುಡುಗ, ಒಂದು ಶಾಪಗ್ರಸ್ತ ಬಾವಿ — ಕೊನೆಯಲ್ಲಿ ಒಂದು ಜೀವನ ಪಾಠ!\nಪ್ರತಿದಿನ ಹೊಸ ಕಥೆಗಾಗಿ ಫಾಲೋ ಮಾಡಿ 🔔\n#Shorts #viral #trending #youtubeshorts #kannadastories #moralstories",
+            "example_title": "ಬಾವಿಯೊಳಗಿಂದ ಬಂದ ಧ್ವನಿ ಏನು ಹೇಳಿತು? 😱",
+            "example_desc": "ಒಂದು ಬಡ ಹುಡುಗ, ಒಂದು ಶಾಪಗ್ರಸ್ತ ಬಾವಿ — ಕೊನೆಯಲ್ಲಿ ಒಂದು ಜೀವನ ಪಾಠ!",
+            "example_banner": "ಬಾವಿ ಮಾತನಾಡಿತು!",
+            "example_question": "ಈ ಹುಡುಗ ಮಾಡಿದ್ದು ಸರಿಯೇ? ನಿಮ್ಮ ಅಭಿಪ್ರಾಯ ಕಮೆಂಟ್ ಮಾಡಿ!",
             "example_tags": ["ಕನ್ನಡ ಕಥೆಗಳು", "ನೀತಿ ಕಥೆ", "ಹಂಪಿ", "shorts", "viral video", "trending", "youtube shorts", "kannada stories", "moral stories", "folklore", "mythology", "kids story"],
         },
         "telugu": {
             "name": "Telugu",
             "script": "Telugu script తెలుగు",
-            "example_title": "బావిలోంచి వచ్చిన స్వరం ఏం చెప్పింది? 😱 తెలుగు నీతి కథ #Shorts",
-            "example_desc": "ఒక పేద కుర్రాడు, ఒక శాపగ్రస్త బావి — చివర్లో ఒక జీవిత పాఠం!\nప్రతిరోజు కొత్త కథ కోసం ఫాలో అవ్వండి 🔔\n#Shorts #viral #trending #youtubeshorts #telugustories #moralstories",
+            "example_title": "బావిలోంచి వచ్చిన స్వరం ఏం చెప్పింది? 😱",
+            "example_desc": "ఒక పేద కుర్రాడు, ఒక శాపగ్రస్త బావి — చివర్లో ఒక జీవిత పాఠం!",
+            "example_banner": "బావి మాట్లాడింది!",
+            "example_question": "ఈ కుర్రాడు చేసింది సరైనదేనా? మీ అభిప్రాయం కామెంట్ చేయండి!",
             "example_tags": ["తెలుగు కథలు", "నీతి కథ", "హంపీ", "shorts", "viral video", "trending", "youtube shorts", "telugu stories", "moral stories", "folklore", "mythology", "kids story"],
         },
         "hindi": {
             "name": "Hindi",
             "script": "Devanagari script हिन्दी",
-            "example_title": "कुएँ से आई आवाज़ ने क्या कहा? 😱 हिंदी नीति कथा #Shorts",
-            "example_desc": "एक गरीब लड़का, एक शापित कुआँ — और अंत में एक ज़िंदगी बदलने वाली सीख!\nरोज़ एक नई कहानी के लिए फॉलो करें 🔔\n#Shorts #viral #trending #youtubeshorts #hindikahani #moralstories",
+            "example_title": "कुएँ से आई आवाज़ ने क्या कहा? 😱",
+            "example_desc": "एक गरीब लड़का, एक शापित कुआँ — और अंत में एक ज़िंदगी बदलने वाली सीख!",
+            "example_banner": "कुआँ बोल पड़ा!",
+            "example_question": "क्या इस लड़के ने सही किया? अपनी राय कमेंट में बताएं!",
             "example_tags": ["हिंदी कहानियां", "नीति कथा", "हम्पी", "shorts", "viral video", "trending", "youtube shorts", "hindi stories", "moral stories", "folklore", "mythology", "kids story"],
         },
     }
@@ -646,16 +680,21 @@ TASK:
    - ABSOLUTELY AVOID archaic, ancient, ceremonial, or textbook words. If a simpler common word exists, use it.
    - Write it the way a friendly human narrator would actually SAY it out loud, with natural flow and rhythm.
    - It must still sound clear and expressive, but easy for an ordinary modern listener to instantly understand.
-   CRITICAL: EACH scene must be ONE short, punchy sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words, never more) so the full video is about {int(TARGET_DURATION_SEC)} seconds. Keep it tight; do not pad or add filler.
-2. Write DISCOVERABLE {spec['name']} YouTube Shorts metadata, built so YouTube recommends it and it reaches new viewers:
-   - "title": A scroll-stopping curiosity-gap hook in {spec['name']} about the story's twist (make them NEED to tap), then "#Shorts". UNDER 90 characters, front-load the strongest search keyword, add exactly ONE fitting emoji. This is a COMPLETE story — do NOT write "Part" or any episode number.
-   - "description": Line 1 = a punchy one-line hook containing the main search keyword (YouTube ranks the first ~100 characters). Line 2 = invite viewers to FOLLOW / subscribe for a NEW story every day (do NOT mention any "Part" or "next episode"). Last line = exactly 6 hashtags: 4 broad trending (#Shorts #viral #trending #youtubeshorts) + 2 story/genre-specific. Natural, never spammy.
+   CRITICAL: EACH scene must be ONE short, punchy sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words, never more) so the full video is about {int(TARGET_DURATION_SEC)} seconds (~42-48s). Keep it tight; do not pad or add filler.
+   PAYOFF: The LAST scene must deliver the moral AND end with a 1-sentence debate question in {spec['name']} that makes viewers want to comment their opinion.
+2. "hook_banner_text": Translate/adapt this English curiosity headline into a punchy 3-to-5 WORD {spec['name']} ({spec['script']}) headline for on-screen display: "{hook_banner_en}". Keep it 3-5 words, bold and curiosity-driven.
+3. "comment_question": A short, provocative debate question in {spec['name']} ({spec['script']}) inviting viewers to comment their opinion about the story's moral/dilemma (can match the question you ended the narration with).
+4. Write DISCOVERABLE {spec['name']} YouTube Shorts metadata, built so YouTube recommends it and it reaches new viewers:
+   - "title": A scroll-stopping curiosity-gap hook in {spec['name']} about the story's twist (make them NEED to tap). UNDER 70 characters, front-load the strongest search keyword, add exactly ONE fitting emoji, NO hashtags. This is a COMPLETE story — do NOT write "Part" or any episode number.
+   - "description": Line 1 = a punchy one-line hook containing the main search keyword (YouTube ranks the first ~100 characters). Keep it to 1-2 sentences, natural, no hashtags (hashtags are added automatically). Do NOT mention any "Part" or "next episode".
    - "tags": EXACTLY 12 high-search tags, NO '#', mixing native {spec['name']} and English: broad trending (shorts, viral video, trending, youtube shorts), genre (moral stories, folklore, mythology, panchatantra, kids story), language ("{spec['name']} stories"), and specifics (hero name, theme, region).
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
 {{
   "title": "{spec['example_title']}",
   "description": "{spec['example_desc']}",
+  "hook_banner_text": "{spec['example_banner']}",
+  "comment_question": "{spec['example_question']}",
   "tags": {json.dumps(spec['example_tags'], ensure_ascii=False)},
   "narration_scenes": [
     "Scene 1 {spec['name']} narration...",
@@ -1203,6 +1242,61 @@ def create_subtitle_overlay_png(text: str, lang: str, out_png: str) -> str:
     return out_png
 
 
+def create_hook_banner_png(text: str, lang: str, out_png: str) -> str:
+    """Render a bold, high-contrast curiosity-hook banner (hook_banner_text) as a full-frame
+    1080x1920 transparent PNG with the pill in the upper-safe zone (y=220). Shown over scene 1
+    for the first few seconds so muted scrollers instantly see the story's stakes."""
+    overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    words = text.split()
+    wrapped = text
+    font = _get_indic_font(lang, size=74)
+    for size in range(74, 41, -2):
+        font = _get_indic_font(lang, size=size)
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            trial = f"{current} {word}".strip()
+            if draw.textlength(trial, font=font) <= 900:
+                current = trial
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        wrapped = "\n".join(lines)
+        if len(lines) <= 2:
+            break
+
+    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=12, align="center")
+    w = bbox[2] - bbox[0]
+    h = bbox[3] - bbox[1]
+    x = (1080 - w) // 2
+    y = 220  # upper-safe zone
+
+    # Bold high-contrast pill: vibrant golden-yellow box with near-black bold text.
+    pad_x, pad_y = 40, 26
+    draw.rounded_rectangle(
+        [x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y],
+        radius=28,
+        fill=(255, 196, 0, 235),  # #FFC400 opaque pill
+    )
+    draw.multiline_text(
+        (x, y),
+        wrapped,
+        font=font,
+        fill="#111111",
+        stroke_width=2,
+        stroke_fill=(255, 255, 255, 180),
+        spacing=12,
+        align="center",
+    )
+
+    overlay.save(out_png, "PNG")
+    return out_png
+
+
 def subtitle_phrases(text: str, duration: float, max_words: int = 7) -> list[tuple[str, float, float]]:
     """Split narration into short, sequential cards spanning the measured TTS duration."""
     words = text.split()
@@ -1235,13 +1329,58 @@ def _measure_duration(path: str) -> float:
     return float(subprocess.check_output(cmd).decode().strip())
 
 
+def _trim_silence(mp3_path: str) -> None:
+    """Trim leading and trailing silence from a scene mp3 so there is no dead air between
+    scenes (retention killer on Shorts/Reels). Conservative threshold keeps a tiny lead-in
+    so speech is never clipped. No-op if ffmpeg fails (keeps the original audio)."""
+    tmp_out = mp3_path + ".trim.mp3"
+    # Trim the head, reverse, trim the (now-)head again, reverse back -> both ends trimmed.
+    af = (
+        "silenceremove=start_periods=1:start_silence=0.04:start_threshold=-40dB:detection=peak,"
+        "areverse,"
+        "silenceremove=start_periods=1:start_silence=0.04:start_threshold=-40dB:detection=peak,"
+        "areverse"
+    )
+    try:
+        subprocess.run(
+            [FFMPEG, "-y", "-i", mp3_path, "-af", af, tmp_out],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+        )
+        if os.path.isfile(tmp_out) and os.path.getsize(tmp_out) > 500:
+            os.replace(tmp_out, mp3_path)
+        elif os.path.isfile(tmp_out):
+            os.remove(tmp_out)
+    except Exception:
+        if os.path.isfile(tmp_out):
+            try:
+                os.remove(tmp_out)
+            except OSError:
+                pass
+
+
 def _edge_prosody_for_emotion(emotion: str) -> tuple[str, str]:
-    """Map a free-text scene emotion to crude edge-tts (rate, pitch) for the fallback path."""
+    """Map a free-text scene emotion to crude edge-tts (rate, pitch) for the fallback path.
+
+    EDGE_BASE_RATE_PCT (+10% by default) is added to the emotion's rate so delivery stays
+    crisp and engaging (no slow dead-air cadence) while keeping per-emotion expressiveness.
+    """
     e = (emotion or "").lower()
-    for key, (rate, pitch) in EDGE_EMOTION_PROSODY.items():
+    emotion_rate = "+0%"
+    pitch = "+0Hz"
+    matched = False
+    for key, (rate, p) in EDGE_EMOTION_PROSODY.items():
         if key in e:
-            return rate, pitch
-    return "-5%", "+0Hz"  # default dramatic pace (matches prior behaviour)
+            emotion_rate, pitch, matched = rate, p, True
+            break
+    if not matched:
+        emotion_rate = "-5%"  # default dramatic pace (matches prior behaviour)
+    try:
+        combined = EDGE_BASE_RATE_PCT + int(emotion_rate.replace("%", "").replace("+", ""))
+    except ValueError:
+        combined = EDGE_BASE_RATE_PCT
+    combined = max(-20, min(40, combined))  # keep intelligible
+    rate = f"+{combined}%" if combined >= 0 else f"{combined}%"
+    return rate, pitch
 
 
 def _gemini_tts_to_mp3(text: str, gemini_voice: str, emotion: str, out_mp3: str) -> None:
@@ -1368,6 +1507,9 @@ async def synthesize_scene_audio(
         if used is None:
             raise RuntimeError(f"All TTS engines failed for this scene (last edge error: {last_edge_err})")
 
+    # Strip leading/trailing silence so scene transitions are tight (zero dead air).
+    _trim_silence(out_mp3)
+
     duration = _measure_duration(out_mp3)
     print(f"    Audio: {os.path.basename(out_mp3)} -> {duration:.2f}s [{used}] ({emotion or 'neutral'})")
     return duration
@@ -1411,7 +1553,7 @@ async def build_language_video(
     bgm_path: Optional[str] = None,
     animated_clips: Optional[dict[int, str]] = None,
 ) -> str:
-    """Render a 60-75s Short with dynamic camera animations, burned-in subtitles, and BGM."""
+    """Render a tight ~42-48s Short: hook banner, dynamic camera, burned-in subtitles, BGM."""
     cfg = LANGUAGE_CONFIG[lang_key]
     narrator = cfg.get("gemini_voice", "Charon") if TTS_ENGINE == "gemini" else cfg["voice"]
     lang_dir = os.path.join(work_dir, lang_key)
@@ -1436,8 +1578,8 @@ async def build_language_video(
             scene_text, audio_path, lang_key=lang_key, emotion=scene_emotion
         )
 
-        # 2. Add 0.4s natural breath pause between scenes
-        total_seg_duration = duration + 0.40
+        # 2. Add a tiny breath gap between scenes (snappy pacing, ~zero dead air)
+        total_seg_duration = duration + SCENE_GAP_SEC
         total_running_time += total_seg_duration
         frames = int(total_seg_duration * 30) + 2
 
@@ -1449,13 +1591,20 @@ async def build_language_video(
             create_subtitle_overlay_png(phrase, lang_key, overlay_path)
             overlay_paths.append(overlay_path)
 
+        # 3b. Scene 1 only: a bold curiosity hook banner at the top for the first few seconds
+        #     (grabs muted scrollers on IG/FB before they swipe).
+        banner_path: Optional[str] = None
+        if i == 0 and getattr(meta, "hook_banner_text", "").strip():
+            banner_path = os.path.join(lang_dir, "hook_banner.png")
+            create_hook_banner_png(meta.hook_banner_text.strip(), lang_key, banner_path)
+
         # 4. Scene visual source: a real AI motion clip (I2V) if one was produced for this
         #    scene, otherwise the static image with alternating Ken Burns camera movement.
         animated_clip = (animated_clips or {}).get(i)
         use_clip = bool(animated_clip) and os.path.isfile(animated_clip or "")
 
         if use_clip:
-            # Retime the ~5s clip to this language's exact scene length (audio + 0.4s pause)
+            # Retime the ~5s clip to this language's exact scene length (audio + scene gap)
             # via setpts, then clone the last frame (tpad) so video always covers the audio.
             try:
                 clip_dur = _measure_duration(animated_clip)
@@ -1501,6 +1650,15 @@ async def build_language_video(
                 f"enable='between(t,{start:.3f},{end:.3f})'[{next_label}]"
             )
             current_label = next_label
+        # Hook banner (scene 1 only): overlaid on top of captions for the first HOOK_BANNER_SEC.
+        # Input ordering: 0 = bg, 1..N = caption overlays, then the banner, then audio.
+        if banner_path:
+            banner_input_idx = len(overlay_paths) + 1
+            filters.append(
+                f"[{current_label}][{banner_input_idx}:v]overlay=0:0:"
+                f"enable='between(t,0,{HOOK_BANNER_SEC:.2f})'[hookbanner_{i}]"
+            )
+            current_label = f"hookbanner_{i}"
         filters.append(
             f"[{current_label}]fade=t=in:st=0:d=0.3,fade=t=out:st={fade_out_st:.2f}:d=0.3,"
             "format=yuv420p[vout]"
@@ -1510,14 +1668,17 @@ async def build_language_video(
         ffmpeg_cmd = [FFMPEG, "-y", *first_input_args]
         for overlay_path in overlay_paths:
             ffmpeg_cmd.extend(["-loop", "1", "-i", os.path.abspath(overlay_path)])
+        if banner_path:
+            ffmpeg_cmd.extend(["-loop", "1", "-i", os.path.abspath(banner_path)])
+        audio_input_idx = len(overlay_paths) + (1 if banner_path else 0) + 1
         ffmpeg_cmd.extend([
             "-i", os.path.abspath(audio_path),
             "-filter_complex", vf_filter,
             "-map", "[vout]",
-            "-map", f"{len(overlay_paths) + 1}:a",
+            "-map", f"{audio_input_idx}:a",
             "-t", f"{total_seg_duration:.3f}",
             "-c:v", "libx264", "-preset", "veryfast",
-            "-af", "apad=pad_dur=0.40",
+            "-af", f"apad=pad_dur={SCENE_GAP_SEC}",
             "-c:a", "aac", "-b:a", "128k",
             "-ar", "44100", "-ac", "2",
             os.path.abspath(seg_path),
@@ -1734,20 +1895,23 @@ async def main() -> None:
 
     # Step 5: Upload to YouTube (if not skipped)
     if not args.skip_upload:
-        from upload_to_youtube import upload_short
+        from upload_to_youtube import upload_short, format_youtube_metadata
 
         for lang_key, vpath in video_paths.items():
             lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
             meta = lang_map[lang_key]
+            yt_title, yt_desc, yt_tags = format_youtube_metadata(
+                meta.title, meta.description, meta.comment_question, meta.tags, lang_code
+            )
             print(f"\n[Upload] Uploading {lang_key.upper()} Short to YouTube...")
             upload_short(
                 video_file=vpath,
-                title=meta.title,
-                description=meta.description,
-                tags=meta.tags,
+                title=yt_title,
+                description=yt_desc,
+                tags=yt_tags,
                 lang_code=lang_code,
                 job_key=job_key,
-                category_id="24",
+                category_id="1",  # Film & Animation
             )
     else:
         print("\n[Upload] ⏭️  Skipped upload as requested (--skip-upload).")
@@ -1756,7 +1920,7 @@ async def main() -> None:
     # Meta publishing never gates episode advancement: a Meta failure must not
     # block the YouTube-driven pipeline, and re-runs are idempotent via the ledger.
     if not args.skip_upload and not args.skip_meta:
-        from upload_to_meta import publish_reel, build_caption, load_meta_credentials
+        from upload_to_meta import publish_reel, build_reel_caption, load_meta_credentials
 
         meta_creds = load_meta_credentials()
         if not meta_creds:
@@ -1766,7 +1930,10 @@ async def main() -> None:
             for lang_key, vpath in video_paths.items():
                 lang_code = LANGUAGE_CONFIG[lang_key]["lang_code"]
                 meta = lang_map[lang_key]
-                caption = build_caption(meta.title, meta.description, meta.tags)
+                caption = build_reel_caption(
+                    meta.hook_banner_text, meta.comment_question,
+                    meta.title, meta.description, lang_code,
+                )
                 print(f"\n[Meta] Cross-posting {lang_key.upper()} Reel to Facebook + Instagram...")
                 try:
                     publish_reel(
