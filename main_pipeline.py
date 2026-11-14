@@ -470,8 +470,8 @@ def refill_story_vault(existing_bank: list[dict], count: int = 4) -> None:
 EXISTING STORIES (DO NOT REPEAT):
 {json.dumps(existing_titles, indent=2)}
 
-Generate exactly {count} BRAND NEW Indian story arcs (Panchatantra, Tenali Rama, Vikram Betal, regional legends).
-Each story needs a character_visual_anchor and exactly 5 episode beats (Part 1 through 5).
+Generate exactly {count} BRAND NEW, SELF-CONTAINED Indian stories (Panchatantra, Tenali Rama, Vikram Betal, regional legends) — each a COMPLETE tale with a clear heartwarming moral, NOT a multi-part series.
+Each story needs a character_visual_anchor and a `core_plot` that tells the WHOLE story in ~60 seconds (setup -> conflict -> clever twist -> moral). `episode_beats` is a 5-point outline of that SINGLE story (scene flow), not separate episodes.
 Include a specific region and source_note. If a plot is invented or heavily adapted, source_note must say so instead of making a false historical claim.
 Story IDs must be: story_{str(max_id_num + 1).zfill(3)}, story_{str(max_id_num + 2).zfill(3)}, etc.
 
@@ -485,13 +485,13 @@ OUTPUT RAW JSON ONLY:
       "source_note": "Folk legend",
       "series_title": "Tenali Rama and the Mystery",
       "character_visual_anchor": "3D Pixar Disney animation style, clever Tenali Rama with dhoti, expressive smirk, vibrant cinematic lighting, 9:16 vertical",
-      "core_plot": "Tenali Rama solves a palace mystery using his quick wit.",
+      "core_plot": "A greedy merchant tricks the court, but Tenali Rama exposes him with a clever trap, teaching that honesty always wins.",
       "episode_beats": [
-        "Part 1: The mystery begins.",
-        "Part 2: Clues emerge.",
-        "Part 3: A false suspect.",
-        "Part 4: The clever trap.",
-        "Part 5: The truth revealed."
+        "A greedy merchant boasts before the king.",
+        "He cheats a poor farmer of his gold.",
+        "Tenali Rama quietly sets a clever trap.",
+        "The merchant exposes his own lie.",
+        "The king rewards honesty; greed is punished."
       ]
     }}
   ]
@@ -515,69 +515,54 @@ def generate_episode_data(state: dict, story: dict) -> MultiLangEpisode:
     if not api_key:
         sys.exit("[FATAL] GEMINI_API_KEY not set. Add it to .env or environment.")
 
-    ep_num = state["current_episode"]
-    max_ep = state["max_episodes_in_arc"]
-    is_finale = ep_num == max_ep
-
-    beat_index = ep_num - 1
-    current_beat = story["episode_beats"][beat_index] if beat_index < len(story["episode_beats"]) else ""
     character_anchor = story["character_visual_anchor"]
 
-    finale_instruction = (
-        "End Scene 8 by resolving the story with a heartwarming moral lesson."
-        if is_finale
-        else f"End Scene 8 with an intense cliffhanger asking viewers to subscribe for Part {ep_num + 1}!"
-    )
-
     # -------------------------------------------------------------
-    # CALL 1: English Director Blueprint (~4s)
+    # CALL 1: English Director Blueprint — ONE complete standalone story
     # -------------------------------------------------------------
-    print(f"[Gemini] Call 1/2: Generating English Director Blueprint ({story['series_title']} Part {ep_num})...")
-    call1_prompt = f"""You are an elite Pixar/Disney animation director creating an Indian folklore animated Short.
+    print(f"[Gemini] Call 1/2: Generating English Director Blueprint ({story['series_title']})...")
+    call1_prompt = f"""You are an elite Pixar/Disney animation director creating a COMPLETE, self-contained Indian folklore animated Short (a full story in ONE video, NOT part of a series).
 
 STORY DETAILS:
-- Series: {story['series_title']}
+- Title: {story['series_title']}
 - Category: {story['category']}
 - Region: {story.get('region', 'Indian folklore')}
-- Core Plot: {story['core_plot']}
-- Episode: Part {ep_num} of {max_ep}
-- Beat to Follow: {current_beat}
-- Previous Events: {state['previous_summary']}
+- Core Plot (tell this WHOLE story, start to finish, in this one video): {story['core_plot']}
 
 CHARACTER ANCHOR:
 {character_anchor}
 
 TASK:
-1. Brainstorm 3 candidate viral hooks for Scene 1 and select the strongest winning hook.
-2. Direct exactly {NUM_SCENES} progressive visual scenes in English.
+1. Brainstorm 3 candidate viral hooks for Scene 1 and pick the strongest. Scene 1 MUST grab a brand-NEW
+   viewer in the first 1-2 seconds (shocking, curious, or emotional) — assume they know nothing and have
+   seen no previous video.
+2. Direct exactly {NUM_SCENES} scenes that tell the FULL story arc in order: hook (scene 1) -> rising
+   tension -> climax -> a satisfying twist and a clear heartwarming MORAL in the final scene. The video
+   must feel COMPLETE on its own: NO "Part 2", NO cliffhanger, NO "subscribe to see what happens next".
    Each scene must have:
    - `scene_number`: 1 to {NUM_SCENES}
    - `story_action_visual_prompt`: Under 320 characters, written for a text-to-image model.
      Structure it as: "3D Pixar Disney animation style, {character_anchor[:90]}, <who is doing WHAT, with the KEY OBJECT clearly visible>, <the specific setting/background>, <lighting/mood>, 9:16 vertical".
-     Name the ONE main subject and the exact action/object concretely (e.g. "holding a glowing golden key", "pointing at a cracked stone idol") so the image renders the right thing — avoid vague words like "magical scene". Keep the hero's look consistent with the character anchor in every scene.
-   - `english_narration`: 1-2 short, punchy sentences of about 14-18 words (never more than 20) advancing the mystery/drama.
+     Name the ONE main subject and the exact action/object concretely (avoid vague words like "magical scene"). Keep the hero's look IDENTICAL to the character anchor in every scene.
+   - `english_narration`: 1-2 short, punchy sentences of about 14-18 words (never more than 20) advancing the story.
    - `emotion`: The dominant delivery emotion a voice actor should use for THIS scene, as 2-4 words
-     matching the on-screen moment (e.g. "tense and fearful", "soft and sad", "excited and joyful",
-     "mysterious and suspenseful", "angry and forceful", "warm and calm"). Vary it scene to scene.
+     (e.g. "tense and fearful", "soft and sad", "excited and joyful", "warm and calm"). Vary it scene to scene.
    - `camera_movement_type`: One of ["push-in", "pull-out", "pan-right", "pan-left", "zoom-in"]
-   - `motion_3d_prompt`: ONE short sentence describing what MOVES and HOW in this shot, for an
-     image-to-video animator — e.g. "camera slowly pushes in as Putta leans over the glowing well,
-     water rippling and mist curling upward, his hair swaying". Focus on gentle, realistic motion.
-3. {finale_instruction}
-4. Provide a 2-sentence `episode_summary_for_next_part`.
+   - `motion_3d_prompt`: ONE short sentence of gentle, realistic motion for an image-to-video animator.
+3. End the FINAL scene by resolving the story with a clear, heartwarming moral, then a SOFT generic
+   call to action (e.g. "follow for a new story every day") — NEVER "wait for Part N".
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
 {{
   "winning_hook": "...",
-  "episode_summary_for_next_part": "...",
   "scenes": [
     {{
       "scene_number": 1,
       "story_action_visual_prompt": "3D Pixar Disney animation style, {character_anchor[:90]}, kneeling at the stone rim of an ancient well and peering down at glowing golden water, ruined Hampi temple at night in the background, eerie blue moonlight, 9:16 vertical",
-      "english_narration": "Deep in the ruins of Hampi, young Putta heard an eerie whisper echoing from the well. The midnight waters began to glow with ancient gold.",
+      "english_narration": "A poor boy drops his last coin into a cursed well - and a voice answers back.",
       "emotion": "tense and fearful",
       "camera_movement_type": "push-in",
-      "motion_3d_prompt": "camera slowly pushes in as Putta leans over the glowing well, water rippling and mist curling upward"
+      "motion_3d_prompt": "camera slowly pushes in as the boy leans over the glowing well, water rippling and mist curling upward"
     }}
   ]
 }}"""
@@ -622,23 +607,23 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
         "kannada": {
             "name": "Kannada",
             "script": "Kannada script ಕನ್ನಡ",
-            "example_title": f"ಬಾವಿಯೊಳಗಿನ ರಹಸ್ಯ ಏನು? 😱 {story['series_title']} Part {ep_num} #Shorts",
-            "example_desc": f"ಹಂಪಿಯ ನಿಗೂಢ ಬಾವಿಯ ರೋಚಕ ಕನ್ನಡ ಕಥೆ!\nPart {ep_num + 1} ಗಾಗಿ ಚಾನೆಲ್ ಸಬ್‌ಸ್ಕ್ರೈಬ್ ಮಾಡಿ 🔔\n#Shorts #viral #trending #youtubeshorts #kannadastories #folklore",
-            "example_tags": ["ಕನ್ನಡ ಕಥೆಗಳು", "ಹಂಪಿ", "ವಿಜಯನಗರ", "shorts", "viral video", "trending", "youtube shorts", "kannada stories", "moral stories", "folklore", "mythology", "kids story"],
+            "example_title": "ಬಾವಿಯೊಳಗಿಂದ ಬಂದ ಧ್ವನಿ ಏನು ಹೇಳಿತು? 😱 ಕನ್ನಡ ನೀತಿ ಕಥೆ #Shorts",
+            "example_desc": "ಒಂದು ಬಡ ಹುಡುಗ, ಒಂದು ಶಾಪಗ್ರಸ್ತ ಬಾವಿ — ಕೊನೆಯಲ್ಲಿ ಒಂದು ಜೀವನ ಪಾಠ!\nಪ್ರತಿದಿನ ಹೊಸ ಕಥೆಗಾಗಿ ಫಾಲೋ ಮಾಡಿ 🔔\n#Shorts #viral #trending #youtubeshorts #kannadastories #moralstories",
+            "example_tags": ["ಕನ್ನಡ ಕಥೆಗಳು", "ನೀತಿ ಕಥೆ", "ಹಂಪಿ", "shorts", "viral video", "trending", "youtube shorts", "kannada stories", "moral stories", "folklore", "mythology", "kids story"],
         },
         "telugu": {
             "name": "Telugu",
             "script": "Telugu script తెలుగు",
-            "example_title": f"బావిలో దాగిన రహస్యం ఏమిటి? 😱 {story['series_title']} Part {ep_num} #Shorts",
-            "example_desc": f"హంపీ రహస్య బావి వెనుక ఉత్కంఠభరిత తెలుగు కథ!\nPart {ep_num + 1} కోసం ఛానెల్ సబ్‌స్క్రైబ్ చేయండి 🔔\n#Shorts #viral #trending #youtubeshorts #telugustories #folklore",
-            "example_tags": ["తెలుగు కథలు", "హంపీ", "విజయనగరం", "shorts", "viral video", "trending", "youtube shorts", "telugu stories", "moral stories", "folklore", "mythology", "kids story"],
+            "example_title": "బావిలోంచి వచ్చిన స్వరం ఏం చెప్పింది? 😱 తెలుగు నీతి కథ #Shorts",
+            "example_desc": "ఒక పేద కుర్రాడు, ఒక శాపగ్రస్త బావి — చివర్లో ఒక జీవిత పాఠం!\nప్రతిరోజు కొత్త కథ కోసం ఫాలో అవ్వండి 🔔\n#Shorts #viral #trending #youtubeshorts #telugustories #moralstories",
+            "example_tags": ["తెలుగు కథలు", "నీతి కథ", "హంపీ", "shorts", "viral video", "trending", "youtube shorts", "telugu stories", "moral stories", "folklore", "mythology", "kids story"],
         },
         "hindi": {
             "name": "Hindi",
             "script": "Devanagari script हिन्दी",
-            "example_title": f"कुएँ में छिपा राज़ क्या था? 😱 {story['series_title']} Part {ep_num} #Shorts",
-            "example_desc": f"हम्पी के रहस्यमयी कुएँ की रोमांचक हिंदी कहानी!\nPart {ep_num + 1} के लिए चैनल सब्सक्राइब करें 🔔\n#Shorts #viral #trending #youtubeshorts #hindikahani #folklore",
-            "example_tags": ["हिंदी कहानियां", "हम्पी", "विजयनगर", "shorts", "viral video", "trending", "youtube shorts", "hindi stories", "moral stories", "folklore", "mythology", "kids story"],
+            "example_title": "कुएँ से आई आवाज़ ने क्या कहा? 😱 हिंदी नीति कथा #Shorts",
+            "example_desc": "एक गरीब लड़का, एक शापित कुआँ — और अंत में एक ज़िंदगी बदलने वाली सीख!\nरोज़ एक नई कहानी के लिए फॉलो करें 🔔\n#Shorts #viral #trending #youtubeshorts #hindikahani #moralstories",
+            "example_tags": ["हिंदी कहानियां", "नीति कथा", "हम्पी", "shorts", "viral video", "trending", "youtube shorts", "hindi stories", "moral stories", "folklore", "mythology", "kids story"],
         },
     }
 
@@ -649,7 +634,7 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks):
         words = _narration_word_target(lang_key)
         call_prompt = f"""You are a popular {spec['name']} YouTube Shorts narrator who speaks the way real people talk today.
 
-STORY: {story['series_title']} - Part {ep_num} of {max_ep}
+STORY: {story['series_title']} (a COMPLETE, self-contained story told in this one video)
 ENGLISH SCENE NARRATIONS:
 {scenes_text}
 
@@ -663,9 +648,9 @@ TASK:
    - It must still sound clear and expressive, but easy for an ordinary modern listener to instantly understand.
    CRITICAL: EACH scene must be ONE short, punchy sentence of about {words} native words (strictly {max(6, words - 2)}-{words + 2} words, never more) so the full video is about {int(TARGET_DURATION_SEC)} seconds. Keep it tight; do not pad or add filler.
 2. Write DISCOVERABLE {spec['name']} YouTube Shorts metadata, built so YouTube recommends it and it reaches new viewers:
-   - "title": A scroll-stopping curiosity-gap hook in {spec['name']} about THIS part's twist (make them NEED to tap), include the hero's name, then "Part {ep_num}" and "#Shorts". UNDER 90 characters, front-load the strongest search keyword, add exactly ONE fitting emoji.
-   - "description": Line 1 = a punchy one-line hook containing the main search keyword (YouTube ranks the first ~100 characters). Line 2 = invite viewers to watch Part {ep_num + 1} and subscribe for the series. Last line = 6 hashtags blending language + genre + broad trending (#Shorts #viral #trending #youtubeshorts plus 2 story-specific). Natural, never spammy.
-   - "tags": EXACTLY 12 high-search tags, NO '#', mixing native {spec['name']} and English: broad trending (shorts, viral video, trending, youtube shorts), genre (moral stories, folklore, mythology, panchatantra, kids story), language ("{spec['name']} stories"), and specifics (hero name, region).
+   - "title": A scroll-stopping curiosity-gap hook in {spec['name']} about the story's twist (make them NEED to tap), then "#Shorts". UNDER 90 characters, front-load the strongest search keyword, add exactly ONE fitting emoji. This is a COMPLETE story — do NOT write "Part" or any episode number.
+   - "description": Line 1 = a punchy one-line hook containing the main search keyword (YouTube ranks the first ~100 characters). Line 2 = invite viewers to FOLLOW / subscribe for a NEW story every day (do NOT mention any "Part" or "next episode"). Last line = exactly 6 hashtags: 4 broad trending (#Shorts #viral #trending #youtubeshorts) + 2 story/genre-specific. Natural, never spammy.
+   - "tags": EXACTLY 12 high-search tags, NO '#', mixing native {spec['name']} and English: broad trending (shorts, viral video, trending, youtube shorts), genre (moral stories, folklore, mythology, panchatantra, kids story), language ("{spec['name']} stories"), and specifics (hero name, theme, region).
 
 OUTPUT RAW JSON ONLY (No markdown codeblocks):
 {{
@@ -1651,7 +1636,7 @@ async def main() -> None:
 
     print("=" * 60)
     print(f"🎬 [{story['category']}] {story['series_title']}")
-    print(f"   Episode {ep_num} of {max_ep} (Target Duration: 65-75 seconds)")
+    print(f"   Complete standalone story (Target Duration: 65-75 seconds)")
     print(f"   Character: {story['character_visual_anchor'][:80]}...")
     if args.skip_upload:
         print("   Upload: SKIPPED (--skip-upload)")
