@@ -21,7 +21,7 @@ Actions** (repo is **public** → unlimited free Actions minutes).
 | Part | How it works | Cost |
 |---|---|---|
 | **Story/script** | Gemini (2 calls): Call 1 = English director blueprint, Call 2 = per-language narration + SEO metadata | tiny (paise) |
-| **Content model** | **STANDALONE complete stories** — each run = one full self-contained ~60s story (hook→twist→moral). NOT serialized parts. | — |
+| **Content model** | **STANDALONE complete stories** — each run = one full self-contained **~70s (60–80s band), 10-scene** story with a real arc: hook+setup → rising action → midpoint twist (scene 5) → climax → resolution+moral+debate question. On-screen hook banner (first 3.5s) + a native debate question for comments. NOT serialized parts. | — |
 | **Images** | **Cloudflare Workers AI FLUX** (free, ~57 img/day) → Gemini safety net. Chain = `cf-first`. | **~₹0** |
 | **Voice** | Gemini 3.8 TTS via **REST** (emotion-aware), edge-tts fallback | **paid, small** |
 | **Motion** | Ken Burns pan/zoom (ffmpeg zoompan). AI video (I2V) exists but is **OFF** (no free option). | free |
@@ -90,6 +90,10 @@ auto-disables the cron.
 ---
 
 ## 7. Recent fixes (newest first)
+- **Instagram CONFIRMED working** — a full posting run landed all 9 (YT+FB+IG). Fix = IG audio 48kHz/≤128k + **container poll-recovery** (Meta still throws `ProcessingFailedError` on the upload step, but we poll the container and it publishes). This is the real fix; faststart alone was not enough.
+- **Longer complete stories** — 10 scenes, ~70s, explicit story arc (no more jumping to the ending). Workflow `NUM_SCENES` default is now **10** (the step env overrides the code default, so the knob that matters is in the workflow). `TARGET_DURATION_SEC=70`.
+- **Reliability hardening (keeps the hands-off pipeline from crashing on one bad LLM response):** tolerant JSON parser (`_loads_lenient`) for Gemini "smart quote"/trailing-comma output; self-heal over-long/empty scene visual prompts (trim to 480 / backfill) instead of a hard 340-char reject; `PYTHONUNBUFFERED=1`+`python -u` so CI logs stream live (runs no longer *look* stuck); dead I2V disabled by default (every free HF Space 404s).
+- **Platform metadata** — YouTube: ≤60-char title + `| <Lang> Story`, description with `💬 question` + 4 hashtags, 8–10 bilingual tags, categoryId 1. IG/FB: caption = `banner — question`, teaser + native share CTA, 6 regional hashtags.
 - **IG `ProcessingFailedError` — the real RCA (audio).** After faststart, IG *still* rejected every Reel on the binary-upload step while FB published fine. Two causes: (1) `-b:a 128k` is a target and AAC drifts to ~129–132k → IG rejects audio over its 128 kbps ceiling (content-dependent drift = why one Hindi Reel posted once, rest never). (2) Meta returns a non-retriable error on upload even when the container still finishes. Fix: encode audio at **112k / 48 kHz / stereo** on both final-encode paths (no-BGM path now re-encodes audio instead of `-c copy`), and IG upload now **polls the container** and only fails if it never reaches FINISHED. Validated encode locally with ffmpeg (aac/48000/112363bps, moov before mdat).
 - **IG `+faststart`** — moved the moov atom to the front (necessary but not sufficient on its own; see above).
 - **Standalone stories** — replaced serialized Part 1–5 arcs with complete self-contained stories (better cold discovery), stronger hooks, no-"Part N" titles, cleaner hashtags.
@@ -101,10 +105,11 @@ auto-disables the cron.
 ---
 
 ## 8. Current state (as of this handoff)
-- `main` is the live production branch. story_001 & story_002 posted to YT+FB; their **IG failed** (the audio-ceiling bug above — now fixed in commit `8008bc8`).
-- **The next scheduled run posts a fresh story to all 3 platforms and is the live validation of the IG audio fix.** IG can't be tested via `skip_upload` (that skips all uploads), and a separate full dispatch run would eat the 2-runs/day YouTube quota — so validation = next scheduled run (free, no extra quota). If IG still fails, check the new log line `[IG] ⚠️ Upload step returned an error ...` for the exact cause.
-- story_001/story_002 IG are a past gap (not auto-retried; backfill only if asked).
-- Merged & closed PRs: #3 (Cloudflare images), #4 (standalone stories). Stale branches may remain.
+- `main` is live and now includes the full retention+SEO+reliability upgrade (merge `7a92d43`). Story pointer is at **story_004** — the next scheduled run generates & posts story_004 (no duplicate).
+- **Instagram is confirmed working on all 3 channels** (full posting run landed 9/9). The old IG failures (story_001/002) are a past gap, not auto-retried.
+- If IG ever fails again, the log line `[IG] ⚠️ Upload step returned an error ...` shows the exact cause; publishing still succeeds as long as the container reaches FINISHED.
+- Scheduled runs produce the 10-scene ~70s story automatically; no action needed.
+- Merged & closed PRs: #3 (Cloudflare images), #4 (standalone stories). Stale remote branches may remain.
 
 ---
 
