@@ -16,9 +16,9 @@ on:
         required: false
         default: '8'
       image_provider:
-        description: 'Image backend: free-first | free | auto | gemini | pollinations | hf'
+        description: 'Image backend: cf-first | free | auto | cloudflare | gemini | pollinations | hf'
         required: false
-        default: 'free-first'
+        default: 'cf-first'
       skip_upload:
         description: 'Render only — do not upload to YouTube or persist state'
         type: boolean
@@ -93,7 +93,10 @@ jobs:
       - name: 🎬 Generate & Upload Shorts
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Optional image fallbacks — pipeline runs without them (Gemini is primary).
+          # Primary FREE image source: Cloudflare Workers AI FLUX (10k neurons/day, no card).
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          # Optional image fallbacks — pipeline runs without them.
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           # Facebook + Instagram Reels cross-posting (optional; skipped if unset).
@@ -103,7 +106,7 @@ jobs:
           # Default to FREE images (Pollinations -> HF FLUX -> paid Gemini last resort).
           # Override per-run via the manual input, or repo-wide via an Actions variable
           # named IMAGE_PROVIDER (Settings -> Secrets and variables -> Actions -> Variables).
-          IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || vars.IMAGE_PROVIDER || 'free-first' }}
+          IMAGE_PROVIDER: ${{ github.event.inputs.image_provider || vars.IMAGE_PROVIDER || 'cf-first' }}
           # Image-to-Video (free HF ZeroGPU). Toggle repo-wide via Actions variables
           # USE_AI_VIDEO (true/false) and I2V_SCENE_INDICES ("1,4,8" | "all" | "").
           USE_AI_VIDEO: ${{ github.event.inputs.use_ai_video || vars.USE_AI_VIDEO || 'false' }}

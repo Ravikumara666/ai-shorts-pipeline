@@ -34,19 +34,27 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 NUM_SCENES = int(os.getenv("NUM_SCENES", "8"))
 
 # Image backend. Each mode is an ordered provider chain tried until one succeeds:
-#   "free-first" (DEFAULT) -> Pollinations -> HF FLUX -> Gemini (paid, last resort) = ~$0 most runs
-#   "free"       -> Pollinations -> HF FLUX (never paid; fails the run if both free services are down)
-#   "auto"       -> Gemini -> Pollinations -> HF (legacy: paid first, best quality)
-#   "gemini" / "pollinations" / "hf" -> that single provider only
-IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "free-first").lower()
+#   "cf-first" (DEFAULT) -> Cloudflare FLUX (free, ~57 img/day) -> Gemini (paid safety net) = ~$0 most runs
+#   "free-first" -> Pollinations -> HF FLUX -> Gemini (paid, last resort)
+#   "free"       -> Cloudflare -> Pollinations -> HF (never paid; fails the run if all free services are down)
+#   "auto"       -> Gemini -> Cloudflare -> Pollinations -> HF (paid first, best quality)
+#   "cloudflare" / "gemini" / "pollinations" / "hf" -> that single provider only
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "cf-first").lower()
 PROVIDER_CHAINS: dict[str, list[str]] = {
+    "cloudflare":   ["cloudflare"],
     "gemini":       ["gemini"],
     "pollinations": ["pollinations"],
     "hf":           ["hf"],
-    "auto":         ["gemini", "pollinations", "hf"],
-    "free":         ["pollinations", "hf"],
+    "cf-first":     ["cloudflare", "gemini"],
+    "auto":         ["gemini", "cloudflare", "pollinations", "hf"],
+    "free":         ["cloudflare", "pollinations", "hf"],
     "free-first":   ["pollinations", "hf", "gemini"],
 }
+
+# Cloudflare Workers AI (free FLUX): 10k neurons/day ~= 57 images/day, stable REST API, no card.
+CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "").strip()
+CF_API_TOKEN = os.getenv("CF_API_TOKEN", "").strip()
+CF_IMAGE_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
 
 # --- Image-to-Video (I2V) animation of key scenes ---------------------------
 # When on, selected scenes are animated into real motion clips (free HF ZeroGPU,
@@ -729,6 +737,48 @@ def _find_generated_file(value: object) -> Optional[Path]:
     return None
 
 
+def _download_via_cloudflare(prompt: str, img_path: str, seed: int) -> bool:
+    """Primary FREE image source: Cloudflare Workers AI FLUX.1-schnell.
+
+    10k free neurons/day (~57 images) over a STABLE REST API — no GPU queue, no card — so it
+    runs hands-off for years. Output is ~1024px; _normalize_to_vertical cover-crops it to the
+    1080x1920 the renderer expects. Returns False (never raises) so the chain can fall through.
+    """
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        print("[Visuals] Cloudflare: CF_ACCOUNT_ID / CF_API_TOKEN not set; skipping.")
+        return False
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_IMAGE_MODEL}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
+    payload = {"prompt": prompt, "steps": 6, "seed": seed}
+    for attempt in range(1, 3):
+        try:
+            print(f"[Visuals] 🎨 Generating scene via Cloudflare FLUX (attempt {attempt}/2)...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+            if resp.status_code == 429:
+                print("[Visuals] ⚠️  Cloudflare daily neuron quota reached (429); falling through.")
+                return False
+            resp.raise_for_status()
+            image_bytes: Optional[bytes] = None
+            if "application/json" in resp.headers.get("Content-Type", "").lower():
+                data = resp.json()
+                if not data.get("success", True):
+                    print(f"[Visuals] ⚠️  Cloudflare error: {str(data.get('errors'))[:160]}")
+                    return False
+                b64 = (data.get("result") or {}).get("image")
+                if b64:
+                    image_bytes = base64.b64decode(b64)
+            else:
+                image_bytes = resp.content  # some CF models return raw image bytes
+            if image_bytes and _normalize_to_vertical(image_bytes, img_path):
+                print(f"[Visuals] ✅ Scene saved via Cloudflare FLUX ({len(image_bytes) // 1024} KB raw).")
+                return True
+            print("[Visuals] ⚠️  Cloudflare returned no usable image.")
+        except Exception as e:
+            print(f"[Visuals] ⚠️  Cloudflare attempt {attempt} failed: {str(e)[:140]}")
+            time.sleep(3 * attempt)
+    return False
+
+
 def _download_via_hf_flux(prompt: str, img_path: str, seed: int) -> bool:
     """Best-effort free fallback through the FLUX.1-schnell Hugging Face Space."""
     try:
@@ -963,8 +1013,12 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
         print(f"[Visuals] Generating Scene {idx + 1}/{len(visual_prompts)} "
               f"(provider={IMAGE_PROVIDER}: {' -> '.join(chain)})...")
 
+        def _try_cloudflare() -> bool:
+            # Primary FREE source: Cloudflare Workers AI FLUX (10k neurons/day, stable REST).
+            return _download_via_cloudflare(clean_prompt, img_path, seed=100 + idx)
+
         def _try_gemini() -> bool:
-            # Google Nano Banana image models (same GEMINI_API_KEY) — PAID.
+            # Google Nano Banana image models (same GEMINI_API_KEY) — PAID safety net.
             return _download_via_gemini_image(clean_prompt, img_path, seed=100 + idx)
 
         def _try_pollinations() -> bool:
@@ -995,6 +1049,7 @@ def generate_shared_images(visual_prompts: list[str], output_dir: str) -> list[s
             return _download_via_hf_flux(clean_prompt, img_path, seed=100 + idx)
 
         provider_fns = {
+            "cloudflare": _try_cloudflare,
             "gemini": _try_gemini,
             "pollinations": _try_pollinations,
             "hf": _try_hf,
