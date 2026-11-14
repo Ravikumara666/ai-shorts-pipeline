@@ -75,7 +75,7 @@ jobs:
           ids = [story.get("id") for story in bank]
           assert len(ids) == len(set(ids)), "story_bank.json has duplicate story IDs"
           assert state.get("current_story_id") in ids, "current story is missing from story_bank.json"
-          assert all(len(story.get("episode_beats", [])) == 5 for story in bank), "every story requires five beats"
+          assert all(story.get("core_plot") for story in bank), "every story needs a core_plot"
           print("Pre-flight quality gate passed.")
           PY
 
