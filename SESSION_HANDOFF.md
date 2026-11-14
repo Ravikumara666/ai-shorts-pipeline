@@ -90,7 +90,8 @@ auto-disables the cron.
 ---
 
 ## 7. Recent fixes (newest first)
-- **IG `+faststart`** — Instagram rejected all Reels with `ProcessingFailedError` (moov atom at end). Added `-movflags +faststart` to the final MP4. (FB was unaffected.)
+- **IG `ProcessingFailedError` — the real RCA (audio).** After faststart, IG *still* rejected every Reel on the binary-upload step while FB published fine. Two causes: (1) `-b:a 128k` is a target and AAC drifts to ~129–132k → IG rejects audio over its 128 kbps ceiling (content-dependent drift = why one Hindi Reel posted once, rest never). (2) Meta returns a non-retriable error on upload even when the container still finishes. Fix: encode audio at **112k / 48 kHz / stereo** on both final-encode paths (no-BGM path now re-encodes audio instead of `-c copy`), and IG upload now **polls the container** and only fails if it never reaches FINISHED. Validated encode locally with ffmpeg (aac/48000/112363bps, moov before mdat).
+- **IG `+faststart`** — moved the moov atom to the front (necessary but not sufficient on its own; see above).
 - **Standalone stories** — replaced serialized Part 1–5 arcs with complete self-contained stories (better cold discovery), stronger hooks, no-"Part N" titles, cleaner hashtags.
 - **Cloudflare free images** — `cf-first` chain; CF payload is `{prompt, steps}` only (extra fields → 400).
 - **IG kn/te retry bug** — `_upload_binary` now reads bytes once (was re-sending a consumed file handle on retry → 0 bytes → 400).
@@ -100,8 +101,9 @@ auto-disables the cron.
 ---
 
 ## 8. Current state (as of this handoff)
-- `main` is the live production branch. Story pointer is at **`story_002`** (story_001 posted to YT+FB; its IG was missed by the pre-faststart bug — one-time gap).
-- **Next scheduled run (18:30 IST) will post story_002 to all 3 platforms including Instagram** and confirm the faststart fix.
+- `main` is the live production branch. story_001 & story_002 posted to YT+FB; their **IG failed** (the audio-ceiling bug above — now fixed in commit `8008bc8`).
+- **The next scheduled run posts a fresh story to all 3 platforms and is the live validation of the IG audio fix.** IG can't be tested via `skip_upload` (that skips all uploads), and a separate full dispatch run would eat the 2-runs/day YouTube quota — so validation = next scheduled run (free, no extra quota). If IG still fails, check the new log line `[IG] ⚠️ Upload step returned an error ...` for the exact cause.
+- story_001/story_002 IG are a past gap (not auto-retried; backfill only if asked).
 - Merged & closed PRs: #3 (Cloudflare images), #4 (standalone stories). Stale branches may remain.
 
 ---
