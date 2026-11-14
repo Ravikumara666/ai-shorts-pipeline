@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       num_scenes:
-        description: 'Scenes per episode (lower = cheaper, e.g. 2 for a smoke test)'
+        description: 'Scenes per episode (10 = full ~70s story; lower = cheaper, e.g. 2 for a smoke test)'
         required: false
-        default: '8'
+        default: '10'
       image_provider:
         description: 'Image backend: cf-first | free | auto | cloudflare | gemini | pollinations | hf'
         required: false
@@ -92,6 +92,10 @@ jobs:
 
       - name: 🎬 Generate & Upload Shorts
         env:
+          # Stream logs live: without this, Python block-buffers stdout in CI (no TTY), so the
+          # live Actions log sits silent for minutes then dumps a burst — making a healthy run
+          # look frozen/stuck. Unbuffered output shows real-time progress.
+          PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # Primary FREE image source: Cloudflare Workers AI FLUX (10k neurons/day, no card).
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -102,7 +106,7 @@ jobs:
           # Facebook + Instagram Reels cross-posting (optional; skipped if unset).
           META_CREDENTIALS_JSON: ${{ secrets.META_CREDENTIALS_JSON }}
           # Manual-run overrides; scheduled runs fall back to the defaults.
-          NUM_SCENES: ${{ github.event.inputs.num_scenes || '8' }}
+          NUM_SCENES: ${{ github.event.inputs.num_scenes || '10' }}
           # Default to FREE images (Pollinations -> HF FLUX -> paid Gemini last resort).
           # Override per-run via the manual input, or repo-wide via an Actions variable
           # named IMAGE_PROVIDER (Settings -> Secrets and variables -> Actions -> Variables).
@@ -114,9 +118,9 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.skip_upload }}" = "true" ]; then
             echo "🧪 Test mode: rendering only (no upload, no state changes)."
-            python -m main_pipeline --skip-upload --dry-run
+            python -u -m main_pipeline --skip-upload --dry-run
           else
-            python -m main_pipeline
+            python -u -m main_pipeline
           fi
 
       - name: 📤 Upload rendered preview (manual runs only)

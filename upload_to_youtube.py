@@ -40,6 +40,91 @@ RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError, http.client.NotConnecte
                          http.client.ResponseNotReady, http.client.BadStatusLine)
 JOB_HISTORY_PATH = Path("job_history.json")
 
+# ---------------------------------------------------------------------------
+# Platform-specific metadata formatting (YouTube Shorts)
+# ---------------------------------------------------------------------------
+YT_MAX_TITLE_CHARS = 60
+
+YT_LANG_NAMES = {"kn": "Kannada", "te": "Telugu", "hi": "Hindi"}
+
+# Exactly 4 targeted hashtags per language for the description (YouTube shows the first 3
+# above the title; #Shorts drives the Shorts shelf).
+YT_HASHTAGS = {
+    "kn": ["#KannadaStories", "#NeethiKathegalu", "#KannadaShorts", "#Shorts"],
+    "te": ["#TeluguStories", "#NeethiKathalu", "#TeluguShorts", "#Shorts"],
+    "hi": ["#HindiKahaniya", "#MoralStoriesHindi", "#HindiShorts", "#Shorts"],
+}
+
+# Curated bilingual (native script + English transliteration) base tags, merged ahead of the
+# model's tags so every upload has strong, consistent search coverage.
+YT_BASE_TAGS = {
+    "kn": ["ಕನ್ನಡ ಕಥೆಗಳು", "ನೀತಿ ಕಥೆ", "kannada stories", "neethi kathegalu",
+           "moral stories", "kannada shorts", "panchatantra", "folklore"],
+    "te": ["తెలుగు కథలు", "నీతి కథ", "telugu stories", "neethi kathalu",
+           "moral stories", "telugu shorts", "panchatantra", "folklore"],
+    "hi": ["हिंदी कहानियां", "नीति कथा", "hindi kahaniya", "moral stories hindi",
+           "moral stories", "hindi shorts", "panchatantra", "folklore"],
+}
+
+
+def _strip_hashtags_and_part(text: str) -> str:
+    """Drop any trailing hashtag block and stray 'Part N' tokens from a model title/line."""
+    text = re.sub(r"#\S+", "", text)
+    text = re.sub(r"\bPart\s*\d+\b", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip(" -–—|")
+
+
+def build_youtube_title(native_title: str, lang_code: str) -> str:
+    """<= 60 char native curiosity hook + ' | <Language> Story' suffix."""
+    lang_name = YT_LANG_NAMES.get(lang_code, lang_code.upper())
+    suffix = f" | {lang_name} Story"
+    hook = _strip_hashtags_and_part(native_title)
+    budget = YT_MAX_TITLE_CHARS - len(suffix)
+    if budget < 10:  # degenerate; just hard-cap the whole thing
+        return (hook + suffix)[:YT_MAX_TITLE_CHARS]
+    if len(hook) > budget:
+        hook = hook[:budget].rstrip(" -–—|,.")
+    return f"{hook}{suffix}"
+
+
+def build_youtube_description(description: str, comment_question: str, lang_code: str) -> str:
+    """Line 1 curiosity summary (keywords), Line 2 '💬 {question}', Line 3 exactly 4 hashtags."""
+    summary = _strip_hashtags_and_part(description.split("\n")[0]) if description else ""
+    hashtags = " ".join(YT_HASHTAGS.get(lang_code, YT_HASHTAGS["hi"]))
+    lines = [summary] if summary else []
+    q = (comment_question or "").strip()
+    if q:
+        lines.append(f"💬 {q}")
+    lines.append(hashtags)
+    return "\n".join(lines)[:5000]
+
+
+def build_youtube_tags(native_tags: list[str] | None, lang_code: str) -> list[str]:
+    """8-10 bilingual keywords: curated base tags first, then fill from the model's tags."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in list(YT_BASE_TAGS.get(lang_code, [])) + list(native_tags or []):
+        t = tag.strip().lstrip("#").strip()
+        key = t.lower()
+        if t and key not in seen:
+            seen.add(key)
+            out.append(t)
+        if len(out) >= 10:
+            break
+    return out
+
+
+def format_youtube_metadata(
+    title: str, description: str, comment_question: str,
+    tags: list[str] | None, lang_code: str,
+) -> tuple[str, str, list[str]]:
+    """One call -> (title, description, tags) formatted for YouTube Shorts."""
+    return (
+        build_youtube_title(title, lang_code),
+        build_youtube_description(description, comment_question, lang_code),
+        build_youtube_tags(tags, lang_code),
+    )
+
 
 def _load_job_history() -> dict:
     if not JOB_HISTORY_PATH.exists():
@@ -165,7 +250,7 @@ def upload_short(
     tags: list[str],
     lang_code: str,
     job_key: str | None = None,
-    category_id: str = "24",
+    category_id: str = "1",  # Film & Animation
 ) -> str:
     """Upload a Short to the YouTube channel for the given language.
 
