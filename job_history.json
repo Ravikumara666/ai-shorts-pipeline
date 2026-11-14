@@ -110,5 +110,58 @@
         }
       }
     }
+  },
+  "story_003_ep1": {
+    "story_id": "story_003",
+    "episode": 1,
+    "prompt_hash": "5888d4629c7d7a6ef10c6da04d53e3df8969c6c37fd8e539ab06801e58df3fdd",
+    "status": "completed",
+    "manifest_path": "output_build/story_003_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "2JdftJjDzyY"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "xw2CjAjYcls"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "Hpg4tJiwPkg"
+      }
+    },
+    "meta_uploads": {
+      "kn": {
+        "facebook": {
+          "status": "published",
+          "post_id": "1131567846465383"
+        },
+        "instagram": {
+          "status": "published",
+          "post_id": "17901039624681029"
+        }
+      },
+      "te": {
+        "facebook": {
+          "status": "published",
+          "post_id": "3127333724283039"
+        },
+        "instagram": {
+          "status": "published",
+          "post_id": "18130464691856667"
+        }
+      },
+      "hi": {
+        "facebook": {
+          "status": "published",
+          "post_id": "1616278160298774"
+        },
+        "instagram": {
+          "status": "published",
+          "post_id": "17912372277579632"
+        }
+      }
+    }
   }
 }

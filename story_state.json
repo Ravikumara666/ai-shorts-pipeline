@@ -1,10 +1,11 @@
 {
-  "current_story_id": "story_003",
+  "current_story_id": "story_004",
   "current_episode": 1,
   "max_episodes_in_arc": 1,
   "previous_summary": "None - This is Episode 1. Start the story with an exciting hook.",
   "completed_story_ids": [
     "story_001",
+    "story_003",
     "story_002"
   ]
 }
