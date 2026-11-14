@@ -1562,6 +1562,9 @@ async def build_language_video(
                 "-c:v", "copy",
                 "-c:a", "aac", "-b:a", "128k",
                 "-ar", "44100", "-ac", "2",
+                # +faststart moves the moov atom to the FRONT so Instagram Reels can process
+                # the video (IG rejects back-loaded moov with ProcessingFailedError; FB tolerates it).
+                "-movflags", "+faststart",
                 "-shortest", final_mp4,
             ],
             stdout=subprocess.DEVNULL,
@@ -1570,7 +1573,12 @@ async def build_language_video(
         )
         print(f"[{lang_key.upper()}] 🎵 Mixed BGM at 10% volume.")
     else:
-        shutil.copyfile(concat_mp4, final_mp4)
+        # Remux (no re-encode) with +faststart so Instagram can process it.
+        subprocess.run(
+            [FFMPEG, "-y", "-i", concat_mp4, "-c", "copy",
+             "-movflags", "+faststart", final_mp4],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+        )
 
     # 7. Hard verification before an episode can enter the upload ledger.
     dur_cmd = [
