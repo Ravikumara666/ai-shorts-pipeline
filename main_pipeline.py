@@ -34,6 +34,11 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 # Lower it for a cheap smoke test, e.g. NUM_SCENES=2.
 NUM_SCENES = int(os.getenv("NUM_SCENES", "10"))
 
+# Max length of a scene's text-to-image prompt. The model is asked for <320 chars but can
+# overshoot with richer scene detail; prompts over this are trimmed (not rejected) so a slightly
+# long prompt never crashes the run. Well under Cloudflare's 2000-char cap.
+VISUAL_PROMPT_MAX_CHARS = int(os.getenv("VISUAL_PROMPT_MAX_CHARS", "480"))
+
 # Image backend. Each mode is an ordered provider chain tried until one succeeds:
 #   "cf-first" (DEFAULT) -> Cloudflare FLUX (free, ~57 img/day) -> Gemini (paid safety net) = ~$0 most runs
 #   "free-first" -> Pollinations -> HF FLUX -> Gemini (paid, last resort)
@@ -446,8 +451,10 @@ def validate_episode_data(episode: MultiLangEpisode) -> None:
     if len(episode.visual_prompts_english) != NUM_SCENES:
         raise ValueError(f"Expected {NUM_SCENES} visual prompts; got {len(episode.visual_prompts_english)}.")
     for idx, prompt in enumerate(episode.visual_prompts_english, start=1):
-        if not prompt.strip() or len(prompt) > 340:
-            raise ValueError(f"Visual prompt {idx} is empty or exceeds 340 characters.")
+        # Prompts are already trimmed/backfilled in generate_episode_data; this is a last-resort
+        # guard that only trips on a truly empty prompt (a slightly long one is tolerated).
+        if not prompt.strip():
+            raise ValueError(f"Visual prompt {idx} is empty.")
 
     script_ranges = {
         "kannada": ("\u0c80", "\u0cff"),
@@ -658,8 +665,21 @@ OUTPUT RAW JSON ONLY (No markdown codeblocks). Use ONLY straight ASCII double qu
     # English curiosity headline for the on-screen hook banner (translated per language in Call 2).
     hook_banner_en = str(call1_data.get("hook_banner_text", "") or "").strip()
 
+    # Build visual prompts defensively: a too-long prompt is trimmed (never crashes the run),
+    # and an empty one is backfilled from the character anchor + that scene's action so the
+    # hands-off pipeline self-heals instead of failing validation.
+    def _clean_visual_prompt(raw: str, scene: dict) -> str:
+        p = str(raw or "").strip()
+        if not p:
+            action = str(scene.get("english_narration", "") or "the hero in a key story moment").strip()
+            p = (f"3D Pixar Disney animation style, {character_anchor[:90]}, {action}, "
+                 "vibrant cinematic lighting, 9:16 vertical")
+        if len(p) > VISUAL_PROMPT_MAX_CHARS:
+            p = p[:VISUAL_PROMPT_MAX_CHARS].rsplit(",", 1)[0].strip().rstrip(",") or p[:VISUAL_PROMPT_MAX_CHARS]
+        return p
+
     visual_prompts_english = [
-        s.get("story_action_visual_prompt", s.get("visual_prompt", ""))
+        _clean_visual_prompt(s.get("story_action_visual_prompt", s.get("visual_prompt", "")), s)
         for s in scenes
     ]
     # Language-independent per-scene delivery emotions (drive expressive TTS for all 3 languages).
