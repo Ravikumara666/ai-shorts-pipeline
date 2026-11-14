@@ -199,8 +199,17 @@ def _json_or_raise(resp: requests.Response, context: str) -> dict:
     return data
 
 
-def _upload_binary(upload_url: str, token: str, video_file: str) -> None:
-    """Stream raw .mp4 bytes to an rupload endpoint (shared by FB & IG)."""
+def _upload_binary(
+    upload_url: str, token: str, video_file: str, raise_on_error: bool = True
+) -> str | None:
+    """Stream raw .mp4 bytes to an rupload endpoint (shared by FB & IG).
+
+    Returns None on success. When ``raise_on_error`` is False, a failed upload returns the
+    error string instead of raising — used by Instagram, where Meta frequently returns a
+    non-retriable ProcessingFailedError on this step even though the container keeps
+    processing and reaches FINISHED a few seconds later. The caller then verifies via the
+    container status poll before deciding the upload really failed.
+    """
     file_size = os.path.getsize(video_file)
     headers = {
         "Authorization": f"OAuth {token}",
@@ -214,10 +223,19 @@ def _upload_binary(upload_url: str, token: str, video_file: str) -> None:
     with open(video_file, "rb") as fh:
         payload = fh.read()
     resp = _request_with_retry("POST", upload_url, headers=headers, data=payload)
-    data = _json_or_raise(resp, "Binary upload")
+    try:
+        data = _json_or_raise(resp, "Binary upload")
+    except RuntimeError as exc:
+        if raise_on_error:
+            raise
+        return str(exc)
     # FB returns {"success": true}; IG returns {"success": true} as well.
     if isinstance(data, dict) and data.get("success") is False:
-        raise RuntimeError(f"Binary upload reported failure: {data}")
+        msg = f"Binary upload reported failure: {data}"
+        if raise_on_error:
+            raise RuntimeError(msg)
+        return msg
+    return None
 
 
 def build_caption(title: str, description: str, tags: list[str] | None = None) -> str:
@@ -333,12 +351,18 @@ def publish_instagram_reel(video_file: str, caption: str, ig_user_id: str, token
         upload_url = f"{RUPLOAD_HOST}/ig-api-upload/{GRAPH_VERSION}/{container_id}"
     print(f"    [IG] Container created (id={container_id})")
 
-    # Phase 2: upload bytes
+    # Phase 2: upload bytes. Do NOT abort on an upload error — Meta often returns a
+    # non-retriable ProcessingFailedError here while the container still finishes
+    # processing. We verify the real outcome via the container status poll below.
     print(f"    [IG] Uploading video bytes...")
-    _upload_binary(upload_url, token, video_file)
+    upload_err = _upload_binary(upload_url, token, video_file, raise_on_error=False)
+    if upload_err:
+        print(f"    [IG] ⚠️  Upload step returned an error ({upload_err}). "
+              f"Verifying container status before giving up...")
 
     # Phase 3: poll container until FINISHED (mandatory before publish)
     print(f"    [IG] Waiting for container processing...")
+    last_status: dict = {}
     for attempt in range(IG_POLL_MAX_ATTEMPTS):
         status_resp = _request_with_retry(
             "GET",
@@ -346,16 +370,22 @@ def publish_instagram_reel(video_file: str, caption: str, ig_user_id: str, token
             params={"fields": "status_code,status", "access_token": token},
         )
         status_data = _json_or_raise(status_resp, "Instagram container status")
+        last_status = status_data
         code = status_data.get("status_code")
         if code == "FINISHED":
             break
         if code == "ERROR":
-            raise RuntimeError(f"Instagram container processing failed: {status_data}")
+            raise RuntimeError(
+                f"Instagram container processing failed: {status_data}"
+                + (f" (upload step error: {upload_err})" if upload_err else "")
+            )
         time.sleep(IG_POLL_INTERVAL)
     else:
+        # Never reached FINISHED. If the upload itself errored, surface that as the cause.
         raise RuntimeError(
             f"Instagram container {container_id} not FINISHED after "
-            f"{IG_POLL_INTERVAL * IG_POLL_MAX_ATTEMPTS}s."
+            f"{IG_POLL_INTERVAL * IG_POLL_MAX_ATTEMPTS}s (last status: {last_status})"
+            + (f"; upload step error: {upload_err}" if upload_err else "")
         )
 
     # Phase 4: publish

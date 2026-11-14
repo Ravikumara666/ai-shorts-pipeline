@@ -1560,10 +1560,15 @@ async def build_language_video(
                 "-map", "0:v",
                 "-map", "[aout]",
                 "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "128k",
-                "-ar", "44100", "-ac", "2",
-                # +faststart moves the moov atom to the FRONT so Instagram Reels can process
-                # the video (IG rejects back-loaded moov with ProcessingFailedError; FB tolerates it).
+                # Instagram Reels audio spec (FB is lax, IG is strict and rejects on the
+                # binary-upload step with ProcessingFailedError):
+                #   - AAC bitrate MUST stay <= 128 kbps. "-b:a 128k" is only a target and the
+                #     encoder drifts to ~129-132k -> IG reject. Use 112k to stay safely under.
+                #   - 48 kHz sample rate (Meta's documented ceiling), stereo.
+                "-c:a", "aac", "-b:a", "112k",
+                "-ar", "48000", "-ac", "2",
+                # +faststart moves the moov atom to the FRONT so IG can read it (back-loaded
+                # moov -> ProcessingFailedError too; FB tolerates it).
                 "-movflags", "+faststart",
                 "-shortest", final_mp4,
             ],
@@ -1573,9 +1578,13 @@ async def build_language_video(
         )
         print(f"[{lang_key.upper()}] 🎵 Mixed BGM at 10% volume.")
     else:
-        # Remux (no re-encode) with +faststart so Instagram can process it.
+        # No BGM: keep the video stream (copy) but re-encode audio to the IG-safe spec
+        # (AAC <=128k so we never drift over IG's ceiling, 48 kHz, stereo) + faststart.
+        # A plain "-c copy" would keep the segment audio at 128k/44.1k -> IG ProcessingFailedError.
         subprocess.run(
-            [FFMPEG, "-y", "-i", concat_mp4, "-c", "copy",
+            [FFMPEG, "-y", "-i", concat_mp4,
+             "-c:v", "copy",
+             "-c:a", "aac", "-b:a", "112k", "-ar", "48000", "-ac", "2",
              "-movflags", "+faststart", final_mp4],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
         )
