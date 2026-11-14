@@ -59,7 +59,10 @@ CF_IMAGE_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schne
 # --- Image-to-Video (I2V) animation of key scenes ---------------------------
 # When on, selected scenes are animated into real motion clips (free HF ZeroGPU,
 # via video_animator.py); any scene that can't animate falls back to Ken Burns.
-USE_AI_VIDEO = os.getenv("USE_AI_VIDEO", "true").strip().lower() in ("1", "true", "yes", "on")
+# Default OFF: every free HF ZeroGPU I2V Space currently 404s (Spaces renamed/removed), so
+# turning it on only wastes time and floods the log with gradio schema dumps that make a run
+# look broken. Opt in explicitly via USE_AI_VIDEO=true only once a working Space is wired up.
+USE_AI_VIDEO = os.getenv("USE_AI_VIDEO", "false").strip().lower() in ("1", "true", "yes", "on")
 # 1-based scene numbers to animate. Default = Hook, Climax, Cliffhanger. "all" = every
 # scene; "" / "none" / "off" = disable (pure Ken Burns). Parsed against the real scene count.
 I2V_SCENE_INDICES = os.getenv("I2V_SCENE_INDICES", "1,4,8")
