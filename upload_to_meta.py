@@ -94,7 +94,10 @@ def load_meta_credentials() -> dict:
     for lang, cfg in creds.items():
         if not isinstance(cfg, dict):
             sys.exit(f"[FATAL] Meta credentials for '{lang}' must be an object.")
-        missing = [k for k in ("fb_page_id", "ig_user_id", "page_access_token") if not cfg.get(k)]
+        # ig_user_id is OPTIONAL — it may be "" while an Instagram account is
+        # temporarily unlinked (e.g. after a Meta security password reset). Facebook
+        # Reels still publish; Instagram is skipped cleanly. Only FB fields are required.
+        missing = [k for k in ("fb_page_id", "page_access_token") if not cfg.get(k)]
         if missing:
             sys.exit(f"[FATAL] Meta credentials for '{lang}' missing: {', '.join(missing)}")
     return creds
@@ -481,7 +484,7 @@ def publish_reel(
         return {"facebook": None, "instagram": None}
 
     page_id = lang_creds["fb_page_id"]
-    ig_user_id = lang_creds["ig_user_id"]
+    ig_user_id = str(lang_creds.get("ig_user_id") or "").strip()
     token = lang_creds["page_access_token"]
 
     results: dict[str, str | None] = {"facebook": None, "instagram": None}
@@ -503,11 +506,13 @@ def publish_reel(
             if job_key:
                 _record_meta(job_key, lang_code, "facebook", "failed", error=str(exc))
 
-    # ---- Instagram ----
+    # ---- Instagram (optional — skipped cleanly if ig_user_id is not configured) ----
     existing_ig = _already_published(job_key, lang_code, "instagram") if job_key else None
     if existing_ig:
         print(f"[Meta] ⏭️  {lang_code.upper()} Instagram already published: {existing_ig}")
         results["instagram"] = existing_ig
+    elif not ig_user_id:
+        print(f"[Meta] ℹ️  Skipping Instagram Reel for {lang_code}: ig_user_id not configured / temporarily unlinked.")
     else:
         print(f"\n[Meta] Publishing {lang_code.upper()} Reel to Instagram {ig_user_id}...")
         try:
@@ -559,7 +564,10 @@ if __name__ == "__main__":
         )
         print(f"\nFacebook Reel ID: {fb_id}")
     else:
+        ig_user_id = str(lang_creds.get("ig_user_id") or "").strip()
+        if not ig_user_id:
+            sys.exit(f"[Meta] ig_user_id not configured for '{args.lang}' — Instagram unavailable (temporarily unlinked).")
         ig_id = publish_instagram_reel(
-            args.video, caption, lang_creds["ig_user_id"], lang_creds["page_access_token"]
+            args.video, caption, ig_user_id, lang_creds["page_access_token"]
         )
         print(f"\nInstagram media ID: {ig_id}")
