@@ -39,22 +39,23 @@ NUM_SCENES = int(os.getenv("NUM_SCENES", "10"))
 # long prompt never crashes the run. Well under Cloudflare's 2000-char cap.
 VISUAL_PROMPT_MAX_CHARS = int(os.getenv("VISUAL_PROMPT_MAX_CHARS", "480"))
 
-# Image backend. Each mode is an ordered provider chain tried until one succeeds:
-#   "cf-first" (DEFAULT) -> Cloudflare FLUX (free, ~57 img/day) -> Gemini (paid safety net) = ~$0 most runs
-#   "free-first" -> Pollinations -> HF FLUX -> Gemini (paid, last resort)
-#   "free"       -> Cloudflare -> Pollinations -> HF (never paid; fails the run if all free services are down)
-#   "auto"       -> Gemini -> Cloudflare -> Pollinations -> HF (paid first, best quality)
-#   "cloudflare" / "gemini" / "pollinations" / "hf" -> that single provider only
+# Image backend. Each mode is an ordered provider chain tried until one succeeds.
+# NOTE: Gemini (paid "Nano Banana") is intentionally REMOVED from every fallback
+# chain so images never cost money — only free providers are used. Set
+# IMAGE_PROVIDER=gemini explicitly if you ever want the paid model back.
+#   "cf-first" (DEFAULT) -> Cloudflare FLUX -> HF FLUX -> Pollinations  (all free)
+#   "free"       -> Cloudflare -> Pollinations -> HF
+#   "cloudflare" / "pollinations" / "hf" / "gemini" -> that single provider only
 IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "cf-first").lower()
 PROVIDER_CHAINS: dict[str, list[str]] = {
     "cloudflare":   ["cloudflare"],
-    "gemini":       ["gemini"],
+    "gemini":       ["gemini"],  # explicit opt-in only; PAID
     "pollinations": ["pollinations"],
     "hf":           ["hf"],
-    "cf-first":     ["cloudflare", "gemini"],
-    "auto":         ["gemini", "cloudflare", "pollinations", "hf"],
+    "cf-first":     ["cloudflare", "hf", "pollinations"],
+    "auto":         ["cloudflare", "pollinations", "hf"],
     "free":         ["cloudflare", "pollinations", "hf"],
-    "free-first":   ["pollinations", "hf", "gemini"],
+    "free-first":   ["pollinations", "hf", "cloudflare"],
 }
 
 # Cloudflare Workers AI (free FLUX): 10k neurons/day ~= 57 images/day, stable REST API, no card.
