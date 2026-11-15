@@ -163,5 +163,64 @@
         }
       }
     }
+  },
+  "story_004_ep1": {
+    "story_id": "story_004",
+    "episode": 1,
+    "prompt_hash": "92a9c30440d7e03366e31226883d5cc55c1c77464e02cb678c5d566cab022abf",
+    "status": "completed",
+    "manifest_path": "output_build/story_004_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "bwv7P6Dm8Y0"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "3ZR5uaFjl_A"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "h4NADlTzBks"
+      }
+    },
+    "meta_uploads": {
+      "kn": {
+        "facebook": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Facebook Reel start failed (HTTP 400): {'message': 'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.', 'type': 'OAuthException', 'code': 190, 'error_subcode': 460, 'fbtrace_id': 'A05TLn5hRqeleoP1rfR9eb_'}"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Instagram container create failed (HTTP 400): {'message': 'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.', 'code': 190, 'type': 'OAuthException', 'error_subcode': 460, 'fbtrace_id': 'AdzWEt4d61nXun_LdJvZrxn'}"
+        }
+      },
+      "te": {
+        "facebook": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Facebook Reel start failed (HTTP 400): {'message': 'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.', 'type': 'OAuthException', 'code': 190, 'error_subcode': 460, 'fbtrace_id': 'AualLL214wEIaB7zkfnSN6O'}"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Instagram container create failed (HTTP 400): {'message': 'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.', 'code': 190, 'type': 'OAuthException', 'error_subcode': 460, 'fbtrace_id': 'A0AtWZZ-WyLGj3gVJ5izNCm'}"
+        }
+      },
+      "hi": {
+        "facebook": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Facebook Reel start failed (HTTP 400): {'message': 'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.', 'type': 'OAuthException', 'code': 190, 'error_subcode': 460, 'fbtrace_id': 'A3iBGiwOnadGeKSqyCy81o_'}"
+        },
+        "instagram": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Instagram container create failed (HTTP 400): {'message': 'Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.', 'code': 190, 'type': 'OAuthException', 'error_subcode': 460, 'fbtrace_id': 'AA2GSVdY4T4nKYxfJQCRKHJ'}"
+        }
+      }
+    }
   }
 }
