@@ -158,5 +158,69 @@
       "Miraculously, a tall coconut tree sprouts, offering water, food, and roofing leaves.",
       "The village is saved, and Meera's selfless love turns into a timeless blessing for all."
     ]
+  },
+  {
+    "id": "story_011",
+    "category": "Tenali Rama Wit",
+    "region": "Vijayanagara",
+    "source_note": "Inspired by traditional folklore",
+    "series_title": "Tenali Rama and the Echoing Well",
+    "character_visual_anchor": "3D Pixar Disney animation style, clever Tenali Rama with a pointed turban and bright orange dhoti, expressive smirk, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A haughty landlord demands taxes on the very air his villagers breathe, but Tenali Rama uses a clever echo trick in court to prove that common resources belong to everyone.",
+    "episode_beats": [
+      "A greedy landlord charges villagers to breathe air near his mango grove.",
+      "A poor old woman brings the bizarre complaint to King Krishnadevaraya's court.",
+      "Tenali Rama listens intently and formulates a brilliant, playful trap.",
+      "Tenali claims the landlord's estate echoes 'stolen soundwaves' and demands a heavy tax.",
+      "The defeated landlord begs forgiveness, teaching that nature's gifts cannot be owned."
+    ]
+  },
+  {
+    "id": "story_012",
+    "category": "Panchatantra Wisdom",
+    "region": "Central India",
+    "source_note": "Adapted from Panchatantra animal fables",
+    "series_title": "The Tiger, the Fox, and the Talking Drum",
+    "character_visual_anchor": "3D Pixar Disney animation style, a wise red fox with large curious eyes and a fluffy tail, lush green jungle background, warm golden hour lighting, 9:16 vertical",
+    "core_plot": "A terrifying tiger threatens a peaceful forest, but a clever fox uses a discarded musical drum and the wind to scare the beast away permanently without a single drop of violence.",
+    "episode_beats": [
+      "A fierce tiger terrorizes all the animals in the tranquil forest.",
+      "A tiny fox discovers an old abandoned war drum hanging from a tree branch.",
+      "When the wind blows, the drum beats a deep, booming rhythm against the hollow trunk.",
+      "The fox convinces the superstitious tiger that the sound belongs to a mythical mountain monster.",
+      "The terrified tiger flees the forest forever, proving wit triumphs over brute strength."
+    ]
+  },
+  {
+    "id": "story_013",
+    "category": "Regional Legend",
+    "region": "Kerala",
+    "source_note": "Original legend adaptation inspired by backwater folklore",
+    "series_title": "The Little Boat That Could",
+    "character_visual_anchor": "3D Pixar Disney animation style, a cheerful wooden fishing boat with big friendly painted eyes, sparkling blue backwaters of Kerala, vibrant tropical colors, 9:16 vertical",
+    "core_plot": "A tiny, aging wooden boat feels useless compared to the grand motorboats, until a sudden monsoon storm traps everyone, and only her shallow draft can navigate the flooded alleyways to save the village.",
+    "episode_beats": [
+      "A small, weathered wooden boat feels inadequate next to modern speedboats.",
+      "A sudden, ferocious monsoon flood cuts off the upper village from supplies.",
+      "Big motorboats get stuck in the shallow, debris-filled narrow canals.",
+      "The little boat bravely navigates the winding paths, carrying food and children to safety.",
+      "The villagers celebrate the tiny boat, proving every individual has unique value."
+    ]
+  },
+  {
+    "id": "story_014",
+    "category": "Vikram and Betal",
+    "region": "Ujjain",
+    "source_note": "Inspired by Vikram-Betal folktales",
+    "series_title": "King Vikram's Toughest Puzzle",
+    "character_visual_anchor": "3D Pixar Disney animation style, brave King Vikram in royal armor carrying a magical spirit on his back, mystical dark forest with glowing blue fireflies, 9:16 vertical",
+    "core_plot": "Carrying the witty spirit Betal through a graveyard, King Vikram faces a moral dilemma about a selfless artist and learns that true sacrifice requires wisdom, not just emotion.",
+    "episode_beats": [
+      "King Vikram walks silently through a spooky, moonlit graveyard carrying Betal.",
+      "Betal tests the king with a complex story about an artist who painted his masterpiece using his own tears.",
+      "Two princes both claim ownership of the painting based on financial and emotional contributions.",
+      "Betal asks Vikram who deserves the painting more, threatening to break his silence.",
+      "Vikram gives a wise, balanced judgment, forcing Betal to fly back to his tree once again."
+    ]
   }
 ]
