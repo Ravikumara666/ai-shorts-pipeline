@@ -1,19 +1,20 @@
 {
-  "current_story_id": "story_012",
+  "current_story_id": "story_013",
   "current_episode": 1,
   "max_episodes_in_arc": 1,
   "previous_summary": "None - This is Episode 1. Start the story with an exciting hook.",
   "completed_story_ids": [
-    "story_002",
     "story_010",
-    "story_007",
+    "story_012",
     "story_001",
-    "story_008",
-    "story_011",
-    "story_005",
-    "story_006",
     "story_003",
+    "story_009",
+    "story_005",
+    "story_007",
     "story_004",
-    "story_009"
+    "story_008",
+    "story_002",
+    "story_011",
+    "story_006"
   ]
 }
