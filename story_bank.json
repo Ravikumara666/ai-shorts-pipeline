@@ -222,5 +222,69 @@
       "Betal asks Vikram who deserves the painting more, threatening to break his silence.",
       "Vikram gives a wise, balanced judgment, forcing Betal to fly back to his tree once again."
     ]
+  },
+  {
+    "id": "story_015",
+    "category": "Panchatantra Animal Fable",
+    "region": "Central India",
+    "source_note": "Original Panchatantra-style fable",
+    "series_title": "The Wise Turtle of Chambal",
+    "character_visual_anchor": "3D Pixar Disney animation style, a wise old turtle wearing a tiny woven leaf hat, sparkling river background, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A proud river otter challenges a slow turtle to a swimming race across the turbulent Chambal river. The otter mocks the turtle, but the turtle uses the strong current and river reeds to float effortlessly, winning the race and teaching that patience and wisdom defeat arrogance.",
+    "episode_beats": [
+      "A proud river otter mocks a slow turtle's swimming speed.",
+      "The otter challenges the turtle to cross the dangerous Chambal river.",
+      "The race begins, and the swift otter rushes straight into heavy whirlpools.",
+      "The calm turtle uses floating reeds and natural currents to glide safely.",
+      "The turtle reaches the finish line first, proving wisdom beats arrogance."
+    ]
+  },
+  {
+    "id": "story_016",
+    "category": "Tenali Rama Wit",
+    "region": "Andhra Pradesh",
+    "source_note": "Folk humor adaptation",
+    "series_title": "Tenali Rama and the Royal Portrait",
+    "character_visual_anchor": "3D Pixar Disney animation style, Tenali Rama holding a blank canvas with a mischievous grin, royal court setting, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A boastful foreign painter claims he can paint the king's portrait so vividly that it will blink. When he demands a massive bag of gold upfront, Tenali Rama presents a completely blank canvas, claiming the king's majestic glory is invisible to fools, turning the tables on the scammer.",
+    "episode_beats": [
+      "A proud foreign painter promises the king a magical, breathing portrait.",
+      "He demands heavy bags of gold before even starting his work.",
+      "Tenali Rama inspects the painter's empty easel and smells a trick.",
+      "Tenali unveils a completely blank canvas and praises its invisible beauty.",
+      "The painter confesses his fraud out of fear, and the gold is saved."
+    ]
+  },
+  {
+    "id": "story_017",
+    "category": "Vikram and Betal Riddle",
+    "region": "Ujjain",
+    "source_note": "Original folktale adaptation",
+    "series_title": "King Vikram's Toughest Choice",
+    "character_visual_anchor": "3D Pixar Disney animation style, King Vikram carrying a glowing mischievous Betal spirit on his back, dark eerie forest, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "Betal tells a story of two brothers who sacrificed their prized possessions to help a stranger, asking Vikram who was truly more generous. Vikram breaks his silence to explain that the brother who gave his last morsel without hesitation possessed true selflessness, forcing Betal to fly back to the tree.",
+    "episode_beats": [
+      "King Vikram walks through a misty forest carrying the talking spirit Betal.",
+      "Betal narrates a tale of two generous brothers helping a weary traveler.",
+      "One brother gave his wealth; the other gave his only meal.",
+      "Betal poses a complex moral riddle asking who showed greater kindness.",
+      "Vikram breaks his silence with the correct answer, causing Betal to fly away."
+    ]
+  },
+  {
+    "id": "story_018",
+    "category": "Regional Legend",
+    "region": "Kerala",
+    "source_note": "Traditional folklore adaptation",
+    "series_title": "The Singing Bamboo of Wayanad",
+    "character_visual_anchor": "3D Pixar Disney animation style, a young tribal girl playing a flute made of whispering green bamboo, lush emerald forest, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A severe drought hits a mountain village, making the bamboo groves silent and sad. A little girl discovers that the bamboo only whispers secrets of underground springs when she plays a tune of gratitude, helping her people find water and teaching that appreciation brings abundance.",
+    "episode_beats": [
+      "A harsh drought silences the musical bamboo groves of the mountains.",
+      "A brave little girl refuses to give up and searches the dry earth.",
+      "She hears faint melodies coming from a single cluster of green stalks.",
+      "She plays her flute in harmony with the wind, waking the hidden springs.",
+      "Water flows back to the village, proving gratitude revives life."
+    ]
   }
 ]
