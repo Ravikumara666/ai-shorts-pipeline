@@ -894,5 +894,61 @@
         }
       }
     }
+  },
+  "story_017_ep1": {
+    "story_id": "story_017",
+    "episode": 1,
+    "prompt_hash": "94cbeb9d11e91584e7199d75651e877e04b43579c642dce540c8da51bded15a3",
+    "status": "completed",
+    "manifest_path": "output_build/story_017_ep1/episode_manifest.json",
+    "uploads": {
+      "kn": {
+        "status": "uploaded",
+        "video_id": "SNHl0wAmXk8"
+      },
+      "te": {
+        "status": "uploaded",
+        "video_id": "iWjuuvPWaFc"
+      },
+      "hi": {
+        "status": "uploaded",
+        "video_id": "6rswUfiVzyE"
+      }
+    },
+    "meta_uploads": {
+      "kn": {
+        "facebook": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Facebook Reel start failed (HTTP 400): {'message': 'Error validating access token: Session has expired on Sunday, 15-Nov-26 03:00:00 PST. The current time is Saturday, 21-Nov-26 11:58:27 PST.', 'type': 'OAuthException', 'code': 190, 'error_subcode': 463, 'fbtrace_id': 'AThIpjgEVnF_dVceD8DiVWu'}"
+        },
+        "instagram": {
+          "status": "pending",
+          "post_id": null
+        }
+      },
+      "te": {
+        "facebook": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Facebook Reel start failed (HTTP 400): {'message': 'Error validating access token: Session has expired on Sunday, 15-Nov-26 03:00:00 PST. The current time is Saturday, 21-Nov-26 11:58:27 PST.', 'type': 'OAuthException', 'code': 190, 'error_subcode': 463, 'fbtrace_id': 'AbBYa9jemD1flyaxMV1qz3v'}"
+        },
+        "instagram": {
+          "status": "pending",
+          "post_id": null
+        }
+      },
+      "hi": {
+        "facebook": {
+          "status": "failed",
+          "post_id": null,
+          "error": "Facebook Reel start failed (HTTP 400): {'message': 'Error validating access token: Session has expired on Sunday, 15-Nov-26 03:00:00 PST. The current time is Saturday, 21-Nov-26 11:58:27 PST.', 'type': 'OAuthException', 'code': 190, 'error_subcode': 463, 'fbtrace_id': 'ANnLjrM5rB232IEtkqJnjGX'}"
+        },
+        "instagram": {
+          "status": "pending",
+          "post_id": null
+        }
+      }
+    }
   }
 }

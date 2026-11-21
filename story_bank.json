@@ -286,5 +286,69 @@
       "She plays her flute in harmony with the wind, waking the hidden springs.",
       "Water flows back to the village, proving gratitude revives life."
     ]
+  },
+  {
+    "id": "story_019",
+    "category": "Tenali Rama Wit",
+    "region": "Vijayanagara",
+    "source_note": "Original story inspired by Tenali Rama folklore traditions",
+    "series_title": "Tenali Rama and the Diamond Pomegranate",
+    "character_visual_anchor": "3D Pixar Disney animation style, clever Tenali Rama with a turquoise turban and mischievous smile, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A boastful courtier claims he grew a tree of pure diamonds, but Tenali Rama tricks him into admitting his lie by asking for an impossible gardening tool.",
+    "episode_beats": [
+      "A proud noble shows off a fake diamond fruit to King Krishnadevaraya.",
+      "The king is amazed, but Tenali Rama suspects a trick.",
+      "Tenali Rama requests a magical silver watering can to nurture the seed.",
+      "The noble stumbles, admitting no ordinary water can touch it because it is fake.",
+      "The court laughs as the noble's vanity is exposed; truth always shines brighter than lies."
+    ]
+  },
+  {
+    "id": "story_020",
+    "category": "Panchatantra Wisdom",
+    "region": "Central India Forests",
+    "source_note": "Original Panchatantra-style animal fable",
+    "series_title": "The Chameleon Who Wanted Every Color",
+    "character_visual_anchor": "3D Pixar Disney animation style, a vibrant cute chameleon with big expressive eyes, lush jungle backdrop, 9:16 vertical",
+    "core_plot": "A restless chameleon tries to copy every dazzling color in the jungle to stand out, only to realize his natural camouflage is his greatest safety.",
+    "episode_beats": [
+      "A young chameleon feels plain and envies the bright parrots and flowers.",
+      "He uses magic berries to paint himself in loud, glowing neon colors.",
+      "A hungry hawk easily spots him zooming through the green canopy.",
+      "He quickly sheds the paint and blends back into the safe leaves just in time.",
+      "He learns to love his own skin; true beauty lies in being comfortable with who you are."
+    ]
+  },
+  {
+    "id": "story_021",
+    "category": "Vikram and Betal",
+    "region": "Ujjain",
+    "source_note": "Original tale inspired by Vikram and Betal framing narratives",
+    "series_title": "King Vikram and the Weaver's Riddle",
+    "character_visual_anchor": "3D Pixar Disney animation style, noble King Vikram carrying a mischievous vampire spirit on his back, misty graveyard setting, 9:16 vertical",
+    "core_plot": "Betal asks Vikram a moral puzzle about a weaver who spins cloth for a king and a beggar simultaneously, testing the true meaning of fairness.",
+    "episode_beats": [
+      "King Vikram walks silently through the dark forest with the hanging Betal.",
+      "Betal tells the tale of a skilled weaver who must choose who gets his finest shawl first.",
+      "The king listens as the weaver gives the royal cloth to the freezing beggar instead.",
+      "Betal asks Vikram if the weaver was wise or foolish to defy royal priority.",
+      "Vikram answers wisely, causing Betal to laugh and fly back to his tree, continuing their game."
+    ]
+  },
+  {
+    "id": "story_022",
+    "category": "Regional Legend",
+    "region": "Punjab",
+    "source_note": "Folk-inspired regional legend",
+    "series_title": "The Nightingale of the Golden Wheat",
+    "character_visual_anchor": "3D Pixar Disney animation style, a tiny golden-feathered singing bird, sunlit wheat fields, warm golden hour lighting, 9:16 vertical",
+    "core_plot": "A tiny bird refuses to sing for a selfish landlord who hoards grain, but fills the fields with music when the poor villagers share their last crust of bread.",
+    "episode_beats": [
+      "Golden wheat fields sway in Punjab under a wealthy landlord's strict rule.",
+      "The landlord locks away his grain, and the little nightingale stops singing in protest.",
+      "A group of poor children happily share their meager roti with the hungry bird.",
+      "Touched by their kindness, the bird sings a melody that magically brings gentle rain to the parched soil.",
+      "The selfish landlord learns that music and joy cannot be bought, only earned through sharing."
+    ]
   }
 ]
