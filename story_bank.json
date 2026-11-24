@@ -350,5 +350,69 @@
       "Touched by their kindness, the bird sings a melody that magically brings gentle rain to the parched soil.",
       "The selfish landlord learns that music and joy cannot be bought, only earned through sharing."
     ]
+  },
+  {
+    "id": "story_023",
+    "category": "Panchatantra Animal Fable",
+    "region": "Central India",
+    "source_note": "Adapted from Panchatantra fables",
+    "series_title": "The Elephant and the Tiny Sparrow",
+    "character_visual_anchor": "3D Pixar Disney animation style, a kind giant elephant with friendly eyes and a small chirpy sparrow perched on its tusk, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A proud elephant destroys a sparrow's nest in the bushes, but when the tiny sparrow seeks help from a woodpecker and a frog, their united wits teach the giant that no one is too small to matter.",
+    "episode_beats": [
+      "A proud elephant stomps through the forest, crushing a little sparrow's home.",
+      "The heartbroken sparrow vows to teach the giant a lesson.",
+      "She teams up with a woodpecker, a frog, and a swarm of bees.",
+      "Together, they blind and confuse the giant elephant until he humbles himself.",
+      "The elephant learns that true strength lies in respecting everyone, no matter their size."
+    ]
+  },
+  {
+    "id": "story_024",
+    "category": "Tenali Rama Wit",
+    "region": "Vijayanagara",
+    "source_note": "Original story inspired by court folklore",
+    "series_title": "Tenali Rama and the Floating Stones",
+    "character_visual_anchor": "3D Pixar Disney animation style, witty Tenali Rama wearing a vibrant turban, holding a magically carved wooden pebble with a mischievous smile, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "Arrogant scholars challenge King Krishnadevaraya's court with an impossible riddle about stones that float on water, but Tenali Rama solves it effortlessly using common sense and sugar.",
+    "episode_beats": [
+      "Proud visiting scholars bring an 'impossible' riddle to the royal court.",
+      "They demand the court find stones that can float on water.",
+      "The royal ministers are completely stumped and worried.",
+      "Tenali Rama drops sugar lumps in water until they melt, calling them sweet foundation stones.",
+      "The scholars are humbled, proving practical wit beats bookish pride."
+    ]
+  },
+  {
+    "id": "story_025",
+    "category": "Vikram and Betal",
+    "region": "Ujjain",
+    "source_note": "Original tale in the spirit of Vikram-Betal legends",
+    "series_title": "King Vikram and the Painter's Shadow",
+    "character_visual_anchor": "3D Pixar Disney animation style, brave King Vikram carrying a mischievous vampire spirit on his back through a misty forest, glowing embers, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "Betal tells the story of a talented painter who painted a king's portrait so lifelike it walked away, forcing Vikram to judge whether the artist or the canvas creator owns the magic.",
+    "episode_beats": [
+      "King Vikram walks silently through the dark, carrying the tricky Betal.",
+      "Betal narrates a tale of a magical painter whose portrait came alive.",
+      "The portrait escaped into the woods, refusing to return to the palace.",
+      "Betal asks Vikram who truly owns the magic: the painter, the canvas maker, or the king who paid?",
+      "Vikram gives a wise answer, forcing Betal to fly back to his tree."
+    ]
+  },
+  {
+    "id": "story_026",
+    "category": "Regional Legend",
+    "region": "Punjab",
+    "source_note": "Original folklore adaptation",
+    "series_title": "The Weaver's Golden Rhythm",
+    "character_visual_anchor": "3D Pixar Disney animation style, a cheerful elderly weaver sitting at a traditional loom weaving glowing golden threads, warm sunlight, vibrant cinematic lighting, 9:16 vertical",
+    "core_plot": "A master weaver loses his eyesight but discovers he can weave the sounds of the village into his carpets, teaching everyone that art comes from the heart, not just the eyes.",
+    "episode_beats": [
+      "An aging weaver creates the most colorful fabrics in his bustling village.",
+      "Sudden illness steals his eyesight, making him fear his career is over.",
+      "He listens closely to the river, birds, and children laughing around him.",
+      "He begins weaving blindly, translating every sound into magical patterns of thread.",
+      "His masterwork stuns the village, proving that passion transcends physical sight."
+    ]
   }
 ]
